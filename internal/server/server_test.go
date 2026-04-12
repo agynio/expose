@@ -203,7 +203,15 @@ func (m *mockRunners) CreateWorkload(context.Context, *runnersv1.CreateWorkloadR
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
+func (m *mockRunners) UpdateWorkload(context.Context, *runnersv1.UpdateWorkloadRequest, ...grpc.CallOption) (*runnersv1.UpdateWorkloadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
 func (m *mockRunners) UpdateWorkloadStatus(context.Context, *runnersv1.UpdateWorkloadStatusRequest, ...grpc.CallOption) (*runnersv1.UpdateWorkloadStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) TouchWorkload(context.Context, *runnersv1.TouchWorkloadRequest, ...grpc.CallOption) (*runnersv1.TouchWorkloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
@@ -223,6 +231,26 @@ func (m *mockRunners) ListWorkloadsByThread(context.Context, *runnersv1.ListWork
 }
 
 func (m *mockRunners) ListWorkloads(context.Context, *runnersv1.ListWorkloadsRequest, ...grpc.CallOption) (*runnersv1.ListWorkloadsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) CreateVolume(context.Context, *runnersv1.CreateVolumeRequest, ...grpc.CallOption) (*runnersv1.CreateVolumeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) UpdateVolume(context.Context, *runnersv1.UpdateVolumeRequest, ...grpc.CallOption) (*runnersv1.UpdateVolumeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) GetVolume(context.Context, *runnersv1.GetVolumeRequest, ...grpc.CallOption) (*runnersv1.GetVolumeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) ListVolumes(context.Context, *runnersv1.ListVolumesRequest, ...grpc.CallOption) (*runnersv1.ListVolumesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) ListVolumesByThread(context.Context, *runnersv1.ListVolumesByThreadRequest, ...grpc.CallOption) (*runnersv1.ListVolumesByThreadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
@@ -325,7 +353,7 @@ func TestAddExposureHappyPath(t *testing.T) {
 	if bindReq == nil || dialReq == nil {
 		t.Fatalf("expected bind and dial policy requests")
 	}
-	if bindReq.GetIdentityRoles()[0] != fmt.Sprintf("#agent-%s", agentID) {
+	if bindReq.GetIdentityRoles()[0] != fmt.Sprintf("#workload-%s", workloadID) {
 		t.Fatalf("unexpected bind identity roles %v", bindReq.GetIdentityRoles())
 	}
 	if dialReq.GetIdentityRoles()[0] != "#all" {
