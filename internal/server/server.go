@@ -100,7 +100,7 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 	bindResp, err := s.zitiMgmt.CreateServicePolicy(ctx, &zitimanagementv1.CreateServicePolicyRequest{
 		Type:          zitimanagementv1.ServicePolicyType_SERVICE_POLICY_TYPE_BIND,
 		Name:          fmt.Sprintf("%s-bind", serviceName),
-		IdentityRoles: []string{fmt.Sprintf("#agent-%s", agentID)},
+		IdentityRoles: []string{fmt.Sprintf("#workload-%s", workloadID)},
 		ServiceRoles:  []string{fmt.Sprintf("@%s", serviceName)},
 	})
 	if err != nil {
