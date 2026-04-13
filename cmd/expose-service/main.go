@@ -77,7 +77,7 @@ func run() error {
 	notificationsClient := notificationsv1.NewNotificationsServiceClient(notificationsConn)
 
 	grpcServer := grpc.NewServer()
-	exposev1.RegisterExposeServiceServer(grpcServer, server.New(storeClient, zitiClient, runnersClient))
+	exposev1.RegisterExposeServiceServer(grpcServer, server.New(storeClient, zitiClient, runnersClient, cfg.ClusterAdminIdentityID))
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddress)
 	if err != nil {

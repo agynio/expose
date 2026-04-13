@@ -28,21 +28,30 @@ type ExposureStore interface {
 
 type Server struct {
 	exposev1.UnimplementedExposeServiceServer
-	store    ExposureStore
-	zitiMgmt zitimanagementv1.ZitiManagementServiceClient
-	runners  runnersv1.RunnersServiceClient
+	store                  ExposureStore
+	zitiMgmt               zitimanagementv1.ZitiManagementServiceClient
+	runners                runnersv1.RunnersServiceClient
+	clusterAdminIdentityID string
 }
 
-func New(store ExposureStore, zitiMgmt zitimanagementv1.ZitiManagementServiceClient, runners runnersv1.RunnersServiceClient) *Server {
-	return &Server{store: store, zitiMgmt: zitiMgmt, runners: runners}
+func New(store ExposureStore, zitiMgmt zitimanagementv1.ZitiManagementServiceClient, runners runnersv1.RunnersServiceClient, clusterAdminIdentityID string) *Server {
+	return &Server{store: store, zitiMgmt: zitiMgmt, runners: runners, clusterAdminIdentityID: clusterAdminIdentityID}
 }
 
 func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureRequest) (*exposev1.AddExposureResponse, error) {
-	workloadID, err := parseUUID(req.GetWorkloadId(), "workload_id")
+	caller, err := resolveExposureCaller(ctx, s.clusterAdminIdentityID)
+	if err != nil {
+		return nil, err
+	}
+	workloadIDValue, agentIDValue, err := resolveAddExposureIDs(caller, req.GetWorkloadId(), req.GetAgentId())
+	if err != nil {
+		return nil, err
+	}
+	workloadID, err := parseUUID(workloadIDValue, "workload_id")
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	agentID, err := parseUUID(req.GetAgentId(), "agent_id")
+	agentID, err := parseUUID(agentIDValue, "agent_id")
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -134,7 +143,15 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 }
 
 func (s *Server) RemoveExposure(ctx context.Context, req *exposev1.RemoveExposureRequest) (*exposev1.RemoveExposureResponse, error) {
-	workloadID, err := parseUUID(req.GetWorkloadId(), "workload_id")
+	caller, err := resolveExposureCaller(ctx, s.clusterAdminIdentityID)
+	if err != nil {
+		return nil, err
+	}
+	workloadIDValue, err := resolveWorkloadID(caller, req.GetWorkloadId())
+	if err != nil {
+		return nil, err
+	}
+	workloadID, err := parseUUID(workloadIDValue, "workload_id")
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -161,7 +178,15 @@ func (s *Server) RemoveExposure(ctx context.Context, req *exposev1.RemoveExposur
 }
 
 func (s *Server) ListExposures(ctx context.Context, req *exposev1.ListExposuresRequest) (*exposev1.ListExposuresResponse, error) {
-	workloadID, err := parseUUID(req.GetWorkloadId(), "workload_id")
+	caller, err := resolveExposureCaller(ctx, s.clusterAdminIdentityID)
+	if err != nil {
+		return nil, err
+	}
+	workloadIDValue, err := resolveWorkloadID(caller, req.GetWorkloadId())
+	if err != nil {
+		return nil, err
+	}
+	workloadID, err := parseUUID(workloadIDValue, "workload_id")
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
