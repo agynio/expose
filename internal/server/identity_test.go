@@ -111,7 +111,7 @@ func TestResolveAddExposureIDsMismatch(t *testing.T) {
 func TestResolveWorkloadIDClusterAdminRequired(t *testing.T) {
 	caller := exposureCaller{isClusterAdmin: true}
 	_, err := resolveWorkloadID(caller, "")
-	if status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("expected permission denied, got %v", err)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected invalid argument, got %v", err)
 	}
 }

@@ -36,6 +36,9 @@ type Server struct {
 }
 
 func New(store ExposureStore, zitiMgmt zitimanagementv1.ZitiManagementServiceClient, runners runnersv1.RunnersServiceClient, authz authorizationv1.AuthorizationServiceClient) *Server {
+	if authz == nil {
+		panic("authorization client is required")
+	}
 	return &Server{store: store, zitiMgmt: zitiMgmt, runners: runners, authz: authz}
 }
 

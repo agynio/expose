@@ -55,30 +55,24 @@ func resolveExposureCaller(ctx context.Context, authz authorizationv1.Authorizat
 		}
 		return exposureCaller{identity: resolved, isClusterAdmin: true}, nil
 	}
-	identityID := strings.TrimSpace(resolved.identityID)
+	identityID := resolved.identityID
 	if identityID == "" {
 		return exposureCaller{}, status.Error(codes.Internal, "agent id missing for agent identity")
 	}
-	workloadID := strings.TrimSpace(resolved.workloadID)
+	workloadID := resolved.workloadID
 	if workloadID == "" {
 		return exposureCaller{}, status.Error(codes.Internal, "workload id missing for agent identity")
 	}
-	resolved.identityID = identityID
-	resolved.workloadID = workloadID
 	return exposureCaller{identity: resolved}, nil
 }
 
 func checkClusterAdmin(ctx context.Context, authz authorizationv1.AuthorizationServiceClient, identityID string) (bool, error) {
-	if authz == nil {
-		return false, status.Error(codes.Internal, "authorization client not configured")
-	}
-	trimmedID := strings.TrimSpace(identityID)
-	if trimmedID == "" {
+	if identityID == "" {
 		return false, status.Error(codes.Internal, "identity id missing for authorization check")
 	}
 	resp, err := authz.Check(ctx, &authorizationv1.CheckRequest{
 		TupleKey: &authorizationv1.TupleKey{
-			User:     identityUserPrefix + trimmedID,
+			User:     identityUserPrefix + identityID,
 			Relation: clusterAdminRelation,
 			Object:   clusterAdminObject,
 		},
@@ -122,7 +116,7 @@ func resolveWorkloadID(caller exposureCaller, workloadID string) (string, error)
 func requireClusterAdminID(value, label string) (string, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
-		return "", status.Error(codes.PermissionDenied, label+" id required for cluster admin")
+		return "", status.Error(codes.InvalidArgument, label+" id required for cluster admin")
 	}
 	return trimmed, nil
 }
