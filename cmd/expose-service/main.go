@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	authorizationv1 "github.com/agynio/expose/.gen/go/agynio/api/authorization/v1"
 	exposev1 "github.com/agynio/expose/.gen/go/agynio/api/expose/v1"
 	notificationsv1 "github.com/agynio/expose/.gen/go/agynio/api/notifications/v1"
 	runnersv1 "github.com/agynio/expose/.gen/go/agynio/api/runners/v1"
@@ -71,13 +72,20 @@ func run() error {
 	}
 	defer notificationsConn.Close()
 
+	authorizationConn, err := grpc.NewClient(cfg.AuthorizationAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("connect to authorization: %w", err)
+	}
+	defer authorizationConn.Close()
+
 	storeClient := store.New(pool)
 	zitiClient := zitimanagementv1.NewZitiManagementServiceClient(zitiConn)
 	runnersClient := runnersv1.NewRunnersServiceClient(runnersConn)
 	notificationsClient := notificationsv1.NewNotificationsServiceClient(notificationsConn)
+	authorizationClient := authorizationv1.NewAuthorizationServiceClient(authorizationConn)
 
 	grpcServer := grpc.NewServer()
-	exposev1.RegisterExposeServiceServer(grpcServer, server.New(storeClient, zitiClient, runnersClient))
+	exposev1.RegisterExposeServiceServer(grpcServer, server.New(storeClient, zitiClient, runnersClient, authorizationClient))
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddress)
 	if err != nil {

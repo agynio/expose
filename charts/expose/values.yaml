@@ -80,6 +80,8 @@ env:
     value: "runners:50051"
   - name: NOTIFICATIONS_ADDRESS
     value: "notifications:50051"
+  - name: AUTHORIZATION_ADDRESS
+    value: "authorization:50051"
   - name: RECONCILIATION_INTERVAL
     value: "30s"
 envFrom: []

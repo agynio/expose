@@ -200,6 +200,10 @@ func (m *mockRunners) ListWorkloads(context.Context, *runnersv1.ListWorkloadsReq
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
+func (m *mockRunners) BatchUpdateWorkloadSampledAt(context.Context, *runnersv1.BatchUpdateWorkloadSampledAtRequest, ...grpc.CallOption) (*runnersv1.BatchUpdateWorkloadSampledAtResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
 func (m *mockRunners) CreateVolume(context.Context, *runnersv1.CreateVolumeRequest, ...grpc.CallOption) (*runnersv1.CreateVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
@@ -217,6 +221,10 @@ func (m *mockRunners) ListVolumes(context.Context, *runnersv1.ListVolumesRequest
 }
 
 func (m *mockRunners) ListVolumesByThread(context.Context, *runnersv1.ListVolumesByThreadRequest, ...grpc.CallOption) (*runnersv1.ListVolumesByThreadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) BatchUpdateVolumeSampledAt(context.Context, *runnersv1.BatchUpdateVolumeSampledAtRequest, ...grpc.CallOption) (*runnersv1.BatchUpdateVolumeSampledAtResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 

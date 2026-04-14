@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 
+	authorizationv1 "github.com/agynio/expose/.gen/go/agynio/api/authorization/v1"
 	exposev1 "github.com/agynio/expose/.gen/go/agynio/api/expose/v1"
 	runnersv1 "github.com/agynio/expose/.gen/go/agynio/api/runners/v1"
 	zitimanagementv1 "github.com/agynio/expose/.gen/go/agynio/api/ziti_management/v1"
@@ -31,18 +32,30 @@ type Server struct {
 	store    ExposureStore
 	zitiMgmt zitimanagementv1.ZitiManagementServiceClient
 	runners  runnersv1.RunnersServiceClient
+	authz    authorizationv1.AuthorizationServiceClient
 }
 
-func New(store ExposureStore, zitiMgmt zitimanagementv1.ZitiManagementServiceClient, runners runnersv1.RunnersServiceClient) *Server {
-	return &Server{store: store, zitiMgmt: zitiMgmt, runners: runners}
+func New(store ExposureStore, zitiMgmt zitimanagementv1.ZitiManagementServiceClient, runners runnersv1.RunnersServiceClient, authz authorizationv1.AuthorizationServiceClient) *Server {
+	if authz == nil {
+		panic("authorization client is required")
+	}
+	return &Server{store: store, zitiMgmt: zitiMgmt, runners: runners, authz: authz}
 }
 
 func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureRequest) (*exposev1.AddExposureResponse, error) {
-	workloadID, err := parseUUID(req.GetWorkloadId(), "workload_id")
+	caller, err := resolveExposureCaller(ctx, s.authz)
+	if err != nil {
+		return nil, err
+	}
+	workloadIDValue, agentIDValue, err := resolveAddExposureIDs(caller, req.GetWorkloadId(), req.GetAgentId())
+	if err != nil {
+		return nil, err
+	}
+	workloadID, err := parseUUID(workloadIDValue, "workload_id")
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	agentID, err := parseUUID(req.GetAgentId(), "agent_id")
+	agentID, err := parseUUID(agentIDValue, "agent_id")
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -134,7 +147,15 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 }
 
 func (s *Server) RemoveExposure(ctx context.Context, req *exposev1.RemoveExposureRequest) (*exposev1.RemoveExposureResponse, error) {
-	workloadID, err := parseUUID(req.GetWorkloadId(), "workload_id")
+	caller, err := resolveExposureCaller(ctx, s.authz)
+	if err != nil {
+		return nil, err
+	}
+	workloadIDValue, err := resolveWorkloadID(caller, req.GetWorkloadId())
+	if err != nil {
+		return nil, err
+	}
+	workloadID, err := parseUUID(workloadIDValue, "workload_id")
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -161,7 +182,15 @@ func (s *Server) RemoveExposure(ctx context.Context, req *exposev1.RemoveExposur
 }
 
 func (s *Server) ListExposures(ctx context.Context, req *exposev1.ListExposuresRequest) (*exposev1.ListExposuresResponse, error) {
-	workloadID, err := parseUUID(req.GetWorkloadId(), "workload_id")
+	caller, err := resolveExposureCaller(ctx, s.authz)
+	if err != nil {
+		return nil, err
+	}
+	workloadIDValue, err := resolveWorkloadID(caller, req.GetWorkloadId())
+	if err != nil {
+		return nil, err
+	}
+	workloadID, err := parseUUID(workloadIDValue, "workload_id")
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}

@@ -27,6 +27,7 @@ jobs:
           --path agynio/api/runners/v1
           --path agynio/api/notifications/v1
           --path agynio/api/identity/v1
+          --path agynio/api/authorization/v1
       - name: Go vet
         run: go vet ./...
       - name: Go test
