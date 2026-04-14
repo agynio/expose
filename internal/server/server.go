@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 
+	authorizationv1 "github.com/agynio/expose/.gen/go/agynio/api/authorization/v1"
 	exposev1 "github.com/agynio/expose/.gen/go/agynio/api/expose/v1"
 	runnersv1 "github.com/agynio/expose/.gen/go/agynio/api/runners/v1"
 	zitimanagementv1 "github.com/agynio/expose/.gen/go/agynio/api/ziti_management/v1"
@@ -28,18 +29,18 @@ type ExposureStore interface {
 
 type Server struct {
 	exposev1.UnimplementedExposeServiceServer
-	store                  ExposureStore
-	zitiMgmt               zitimanagementv1.ZitiManagementServiceClient
-	runners                runnersv1.RunnersServiceClient
-	clusterAdminIdentityID string
+	store    ExposureStore
+	zitiMgmt zitimanagementv1.ZitiManagementServiceClient
+	runners  runnersv1.RunnersServiceClient
+	authz    authorizationv1.AuthorizationServiceClient
 }
 
-func New(store ExposureStore, zitiMgmt zitimanagementv1.ZitiManagementServiceClient, runners runnersv1.RunnersServiceClient, clusterAdminIdentityID string) *Server {
-	return &Server{store: store, zitiMgmt: zitiMgmt, runners: runners, clusterAdminIdentityID: clusterAdminIdentityID}
+func New(store ExposureStore, zitiMgmt zitimanagementv1.ZitiManagementServiceClient, runners runnersv1.RunnersServiceClient, authz authorizationv1.AuthorizationServiceClient) *Server {
+	return &Server{store: store, zitiMgmt: zitiMgmt, runners: runners, authz: authz}
 }
 
 func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureRequest) (*exposev1.AddExposureResponse, error) {
-	caller, err := resolveExposureCaller(ctx, s.clusterAdminIdentityID)
+	caller, err := resolveExposureCaller(ctx, s.authz)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +144,7 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 }
 
 func (s *Server) RemoveExposure(ctx context.Context, req *exposev1.RemoveExposureRequest) (*exposev1.RemoveExposureResponse, error) {
-	caller, err := resolveExposureCaller(ctx, s.clusterAdminIdentityID)
+	caller, err := resolveExposureCaller(ctx, s.authz)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +179,7 @@ func (s *Server) RemoveExposure(ctx context.Context, req *exposev1.RemoveExposur
 }
 
 func (s *Server) ListExposures(ctx context.Context, req *exposev1.ListExposuresRequest) (*exposev1.ListExposuresResponse, error) {
-	caller, err := resolveExposureCaller(ctx, s.clusterAdminIdentityID)
+	caller, err := resolveExposureCaller(ctx, s.authz)
 	if err != nil {
 		return nil, err
 	}

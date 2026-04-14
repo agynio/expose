@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -13,7 +12,7 @@ type Config struct {
 	ZitiManagementAddress  string
 	RunnersAddress         string
 	NotificationsAddress   string
-	ClusterAdminIdentityID string
+	AuthorizationAddress   string
 	ReconciliationInterval time.Duration
 }
 
@@ -39,7 +38,10 @@ func FromEnv() (Config, error) {
 	if cfg.NotificationsAddress == "" {
 		cfg.NotificationsAddress = "notifications:50051"
 	}
-	cfg.ClusterAdminIdentityID = strings.TrimSpace(os.Getenv("CLUSTER_ADMIN_IDENTITY_ID"))
+	cfg.AuthorizationAddress = os.Getenv("AUTHORIZATION_ADDRESS")
+	if cfg.AuthorizationAddress == "" {
+		cfg.AuthorizationAddress = "authorization:50051"
+	}
 	interval, err := durationFromEnv("RECONCILIATION_INTERVAL", 30*time.Second)
 	if err != nil {
 		return Config{}, err

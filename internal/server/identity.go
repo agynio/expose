@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	authorizationv1 "github.com/agynio/expose/.gen/go/agynio/api/authorization/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -14,6 +15,9 @@ const (
 	identityIDMetadataKey   = "x-identity-id"
 	identityTypeMetadataKey = "x-identity-type"
 	workloadIDMetadataKey   = "x-workload-id"
+	clusterAdminRelation    = "admin"
+	clusterAdminObject      = "cluster:global"
+	identityUserPrefix      = "identity:"
 )
 
 type identityType string
@@ -36,16 +40,20 @@ type exposureCaller struct {
 	isClusterAdmin bool
 }
 
-func resolveExposureCaller(ctx context.Context, clusterAdminIdentityID string) (exposureCaller, error) {
+func resolveExposureCaller(ctx context.Context, authz authorizationv1.AuthorizationServiceClient) (exposureCaller, error) {
 	resolved, err := identityFromContext(ctx)
 	if err != nil {
 		return exposureCaller{}, err
 	}
-	if clusterAdminIdentityID != "" && resolved.identityID == clusterAdminIdentityID {
-		return exposureCaller{identity: resolved, isClusterAdmin: true}, nil
-	}
 	if resolved.identityType != identityTypeAgent {
-		return exposureCaller{}, status.Error(codes.PermissionDenied, "identity is not an agent")
+		allowed, err := checkClusterAdmin(ctx, authz, resolved.identityID)
+		if err != nil {
+			return exposureCaller{}, err
+		}
+		if !allowed {
+			return exposureCaller{}, status.Error(codes.PermissionDenied, "identity is not authorized")
+		}
+		return exposureCaller{identity: resolved, isClusterAdmin: true}, nil
 	}
 	identityID := strings.TrimSpace(resolved.identityID)
 	if identityID == "" {
@@ -58,6 +66,27 @@ func resolveExposureCaller(ctx context.Context, clusterAdminIdentityID string) (
 	resolved.identityID = identityID
 	resolved.workloadID = workloadID
 	return exposureCaller{identity: resolved}, nil
+}
+
+func checkClusterAdmin(ctx context.Context, authz authorizationv1.AuthorizationServiceClient, identityID string) (bool, error) {
+	if authz == nil {
+		return false, status.Error(codes.Internal, "authorization client not configured")
+	}
+	trimmedID := strings.TrimSpace(identityID)
+	if trimmedID == "" {
+		return false, status.Error(codes.Internal, "identity id missing for authorization check")
+	}
+	resp, err := authz.Check(ctx, &authorizationv1.CheckRequest{
+		TupleKey: &authorizationv1.TupleKey{
+			User:     identityUserPrefix + trimmedID,
+			Relation: clusterAdminRelation,
+			Object:   clusterAdminObject,
+		},
+	})
+	if err != nil {
+		return false, status.Errorf(codes.Internal, "authorization check failed: %v", err)
+	}
+	return resp.GetAllowed(), nil
 }
 
 func resolveAddExposureIDs(caller exposureCaller, workloadID, agentID string) (string, string, error) {
