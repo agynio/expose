@@ -390,6 +390,12 @@ func TestAddExposureHappyPath(t *testing.T) {
 	if dialReq.GetIdentityRoles()[0] != "#all" {
 		t.Fatalf("unexpected dial identity roles %v", dialReq.GetIdentityRoles())
 	}
+	if len(bindReq.GetServiceRoles()) != 1 || bindReq.GetServiceRoles()[0] != "@svc-id" {
+		t.Fatalf("unexpected bind service roles %v", bindReq.GetServiceRoles())
+	}
+	if len(dialReq.GetServiceRoles()) != 1 || dialReq.GetServiceRoles()[0] != "@svc-id" {
+		t.Fatalf("unexpected dial service roles %v", dialReq.GetServiceRoles())
+	}
 
 	expectedURL := fmt.Sprintf("http://%s.ziti:8080", serviceName)
 	if provisioned.URL != expectedURL {

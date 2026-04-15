@@ -108,13 +108,14 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 		s.handleProvisioningFailure(ctx, exposureID, resources)
 		return nil, status.Errorf(codes.Internal, "create service: %v", err)
 	}
-	resources.OpenZitiServiceID = serviceResp.GetZitiServiceId()
+	serviceID := serviceResp.GetZitiServiceId()
+	resources.OpenZitiServiceID = serviceID
 
 	bindResp, err := s.zitiMgmt.CreateServicePolicy(ctx, &zitimanagementv1.CreateServicePolicyRequest{
 		Type:          zitimanagementv1.ServicePolicyType_SERVICE_POLICY_TYPE_BIND,
 		Name:          fmt.Sprintf("%s-bind", serviceName),
 		IdentityRoles: []string{fmt.Sprintf("#workload-%s", workloadID)},
-		ServiceRoles:  []string{fmt.Sprintf("@%s", serviceName)},
+		ServiceRoles:  []string{fmt.Sprintf("@%s", serviceID)},
 	})
 	if err != nil {
 		s.handleProvisioningFailure(ctx, exposureID, resources)
@@ -126,7 +127,7 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 		Type:          zitimanagementv1.ServicePolicyType_SERVICE_POLICY_TYPE_DIAL,
 		Name:          fmt.Sprintf("%s-dial", serviceName),
 		IdentityRoles: []string{"#all"},
-		ServiceRoles:  []string{fmt.Sprintf("@%s", serviceName)},
+		ServiceRoles:  []string{fmt.Sprintf("@%s", serviceID)},
 	})
 	if err != nil {
 		s.handleProvisioningFailure(ctx, exposureID, resources)
