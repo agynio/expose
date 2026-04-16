@@ -235,7 +235,7 @@ func (r *Reconciler) deleteService(ctx context.Context, id string) error {
 
 func isTerminalWorkload(workload *runnersv1.Workload) bool {
 	if workload == nil {
-		return false
+		return true
 	}
 	if workload.GetRemovedAt() != nil {
 		return true
