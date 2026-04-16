@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type mockReconcilerStore struct {
@@ -302,6 +303,161 @@ func TestReconcileOrphanedRemovesExposure(t *testing.T) {
 	}
 }
 
+func TestReconcileOrphanedRemovesExposureWhenRemovedAt(t *testing.T) {
+	ctx := context.Background()
+	exposure := store.Exposure{
+		ID:                   uuid.New(),
+		WorkloadID:           uuid.New(),
+		OpenZitiServiceID:    "svc",
+		OpenZitiBindPolicyID: "bind",
+		OpenZitiDialPolicyID: "dial",
+	}
+
+	updated := 0
+	deleted := 0
+	storeMock := &mockReconcilerStore{
+		listByStatus: func(_ context.Context, status store.ExposureStatus) ([]store.Exposure, error) {
+			if status == store.ExposureStatusActive {
+				return []store.Exposure{exposure}, nil
+			}
+			return nil, nil
+		},
+		updateExposureStatus: func(_ context.Context, id uuid.UUID, status store.ExposureStatus) error {
+			if id != exposure.ID {
+				t.Fatalf("unexpected exposure id %s", id)
+			}
+			if status != store.ExposureStatusRemoving {
+				t.Fatalf("unexpected status %v", status)
+			}
+			updated++
+			return nil
+		},
+		deleteExposure: func(_ context.Context, id uuid.UUID) error {
+			if id != exposure.ID {
+				t.Fatalf("unexpected exposure id %s", id)
+			}
+			deleted++
+			return nil
+		},
+	}
+
+	deletedPolicies := 0
+	deletedServices := 0
+	mgmt := &mockZitiMgmt{
+		deletePolicy: func(_ context.Context, req *zitimanagementv1.DeleteServicePolicyRequest) (*zitimanagementv1.DeleteServicePolicyResponse, error) {
+			deletedPolicies++
+			return &zitimanagementv1.DeleteServicePolicyResponse{}, nil
+		},
+		deleteSvc: func(_ context.Context, req *zitimanagementv1.DeleteServiceRequest) (*zitimanagementv1.DeleteServiceResponse, error) {
+			deletedServices++
+			return &zitimanagementv1.DeleteServiceResponse{}, nil
+		},
+	}
+
+	runners := &mockRunners{
+		getWorkload: func(_ context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+			return &runnersv1.GetWorkloadResponse{
+				Workload: &runnersv1.Workload{
+					Status:    runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING,
+					RemovedAt: timestamppb.New(time.Now()),
+				},
+			}, nil
+		},
+	}
+
+	reconciler := New(storeMock, mgmt, runners, nil, time.Second)
+	reconciler.ReconcileOnce(ctx)
+
+	if updated != 1 {
+		t.Fatalf("expected update called once, got %d", updated)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected delete called once, got %d", deleted)
+	}
+	if deletedPolicies != 2 {
+		t.Fatalf("expected policy deletes 2, got %d", deletedPolicies)
+	}
+	if deletedServices != 1 {
+		t.Fatalf("expected service deletes 1, got %d", deletedServices)
+	}
+}
+
+func TestReconcileOrphanedRemovesExposureWhenFailed(t *testing.T) {
+	ctx := context.Background()
+	exposure := store.Exposure{
+		ID:                   uuid.New(),
+		WorkloadID:           uuid.New(),
+		OpenZitiServiceID:    "svc",
+		OpenZitiBindPolicyID: "bind",
+		OpenZitiDialPolicyID: "dial",
+	}
+
+	updated := 0
+	deleted := 0
+	storeMock := &mockReconcilerStore{
+		listByStatus: func(_ context.Context, status store.ExposureStatus) ([]store.Exposure, error) {
+			if status == store.ExposureStatusActive {
+				return []store.Exposure{exposure}, nil
+			}
+			return nil, nil
+		},
+		updateExposureStatus: func(_ context.Context, id uuid.UUID, status store.ExposureStatus) error {
+			if id != exposure.ID {
+				t.Fatalf("unexpected exposure id %s", id)
+			}
+			if status != store.ExposureStatusRemoving {
+				t.Fatalf("unexpected status %v", status)
+			}
+			updated++
+			return nil
+		},
+		deleteExposure: func(_ context.Context, id uuid.UUID) error {
+			if id != exposure.ID {
+				t.Fatalf("unexpected exposure id %s", id)
+			}
+			deleted++
+			return nil
+		},
+	}
+
+	deletedPolicies := 0
+	deletedServices := 0
+	mgmt := &mockZitiMgmt{
+		deletePolicy: func(_ context.Context, req *zitimanagementv1.DeleteServicePolicyRequest) (*zitimanagementv1.DeleteServicePolicyResponse, error) {
+			deletedPolicies++
+			return &zitimanagementv1.DeleteServicePolicyResponse{}, nil
+		},
+		deleteSvc: func(_ context.Context, req *zitimanagementv1.DeleteServiceRequest) (*zitimanagementv1.DeleteServiceResponse, error) {
+			deletedServices++
+			return &zitimanagementv1.DeleteServiceResponse{}, nil
+		},
+	}
+
+	runners := &mockRunners{
+		getWorkload: func(_ context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+			return &runnersv1.GetWorkloadResponse{
+				Workload: &runnersv1.Workload{Status: runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED},
+			}, nil
+		},
+	}
+
+	reconciler := New(storeMock, mgmt, runners, nil, time.Second)
+	reconciler.ReconcileOnce(ctx)
+
+	if updated != 1 {
+		t.Fatalf("expected update called once, got %d", updated)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected delete called once, got %d", deleted)
+	}
+	if deletedPolicies != 2 {
+		t.Fatalf("expected policy deletes 2, got %d", deletedPolicies)
+	}
+	if deletedServices != 1 {
+		t.Fatalf("expected service deletes 1, got %d", deletedServices)
+	}
+}
+
 func TestReconcileOrphanedSkipsExistingWorkload(t *testing.T) {
 	ctx := context.Background()
 	exposure := store.Exposure{ID: uuid.New(), WorkloadID: uuid.New()}
@@ -327,7 +483,9 @@ func TestReconcileOrphanedSkipsExistingWorkload(t *testing.T) {
 
 	reconciler := New(storeMock, &mockZitiMgmt{}, &mockRunners{
 		getWorkload: func(_ context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
-			return &runnersv1.GetWorkloadResponse{}, nil
+			return &runnersv1.GetWorkloadResponse{
+				Workload: &runnersv1.Workload{Status: runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING},
+			}, nil
 		},
 	}, nil, time.Second)
 
@@ -335,6 +493,185 @@ func TestReconcileOrphanedSkipsExistingWorkload(t *testing.T) {
 
 	if updated != 0 {
 		t.Fatalf("expected no updates, got %d", updated)
+	}
+	if deleted != 0 {
+		t.Fatalf("expected no deletes, got %d", deleted)
+	}
+}
+
+func TestReconcileWorkloadRemovesExposureWhenRemovedAt(t *testing.T) {
+	ctx := context.Background()
+	workloadID := uuid.New()
+	exposure := store.Exposure{
+		ID:                   uuid.New(),
+		WorkloadID:           workloadID,
+		OpenZitiServiceID:    "svc",
+		OpenZitiBindPolicyID: "bind",
+		OpenZitiDialPolicyID: "dial",
+	}
+
+	listCalls := 0
+	deleted := 0
+	storeMock := &mockReconcilerStore{
+		listByWorkloadAll: func(_ context.Context, id uuid.UUID) ([]store.Exposure, error) {
+			if id != workloadID {
+				t.Fatalf("unexpected workload id %s", id)
+			}
+			listCalls++
+			return []store.Exposure{exposure}, nil
+		},
+		deleteExposure: func(_ context.Context, id uuid.UUID) error {
+			if id != exposure.ID {
+				t.Fatalf("unexpected exposure id %s", id)
+			}
+			deleted++
+			return nil
+		},
+	}
+
+	deletedPolicies := 0
+	deletedServices := 0
+	mgmt := &mockZitiMgmt{
+		deletePolicy: func(_ context.Context, req *zitimanagementv1.DeleteServicePolicyRequest) (*zitimanagementv1.DeleteServicePolicyResponse, error) {
+			deletedPolicies++
+			return &zitimanagementv1.DeleteServicePolicyResponse{}, nil
+		},
+		deleteSvc: func(_ context.Context, req *zitimanagementv1.DeleteServiceRequest) (*zitimanagementv1.DeleteServiceResponse, error) {
+			deletedServices++
+			return &zitimanagementv1.DeleteServiceResponse{}, nil
+		},
+	}
+
+	runners := &mockRunners{
+		getWorkload: func(_ context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+			if req.Id != workloadID.String() {
+				t.Fatalf("unexpected workload id %s", req.Id)
+			}
+			return &runnersv1.GetWorkloadResponse{
+				Workload: &runnersv1.Workload{
+					Status:    runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING,
+					RemovedAt: timestamppb.New(time.Now()),
+				},
+			}, nil
+		},
+	}
+
+	reconciler := New(storeMock, mgmt, runners, nil, time.Second)
+	reconciler.reconcileWorkload(ctx, workloadID)
+
+	if listCalls != 1 {
+		t.Fatalf("expected list called once, got %d", listCalls)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected delete called once, got %d", deleted)
+	}
+	if deletedPolicies != 2 {
+		t.Fatalf("expected policy deletes 2, got %d", deletedPolicies)
+	}
+	if deletedServices != 1 {
+		t.Fatalf("expected service deletes 1, got %d", deletedServices)
+	}
+}
+
+func TestReconcileWorkloadRemovesExposureWhenFailed(t *testing.T) {
+	ctx := context.Background()
+	workloadID := uuid.New()
+	exposure := store.Exposure{
+		ID:                   uuid.New(),
+		WorkloadID:           workloadID,
+		OpenZitiServiceID:    "svc",
+		OpenZitiBindPolicyID: "bind",
+		OpenZitiDialPolicyID: "dial",
+	}
+
+	listCalls := 0
+	deleted := 0
+	storeMock := &mockReconcilerStore{
+		listByWorkloadAll: func(_ context.Context, id uuid.UUID) ([]store.Exposure, error) {
+			if id != workloadID {
+				t.Fatalf("unexpected workload id %s", id)
+			}
+			listCalls++
+			return []store.Exposure{exposure}, nil
+		},
+		deleteExposure: func(_ context.Context, id uuid.UUID) error {
+			if id != exposure.ID {
+				t.Fatalf("unexpected exposure id %s", id)
+			}
+			deleted++
+			return nil
+		},
+	}
+
+	deletedPolicies := 0
+	deletedServices := 0
+	mgmt := &mockZitiMgmt{
+		deletePolicy: func(_ context.Context, req *zitimanagementv1.DeleteServicePolicyRequest) (*zitimanagementv1.DeleteServicePolicyResponse, error) {
+			deletedPolicies++
+			return &zitimanagementv1.DeleteServicePolicyResponse{}, nil
+		},
+		deleteSvc: func(_ context.Context, req *zitimanagementv1.DeleteServiceRequest) (*zitimanagementv1.DeleteServiceResponse, error) {
+			deletedServices++
+			return &zitimanagementv1.DeleteServiceResponse{}, nil
+		},
+	}
+
+	runners := &mockRunners{
+		getWorkload: func(_ context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+			return &runnersv1.GetWorkloadResponse{
+				Workload: &runnersv1.Workload{Status: runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED},
+			}, nil
+		},
+	}
+
+	reconciler := New(storeMock, mgmt, runners, nil, time.Second)
+	reconciler.reconcileWorkload(ctx, workloadID)
+
+	if listCalls != 1 {
+		t.Fatalf("expected list called once, got %d", listCalls)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected delete called once, got %d", deleted)
+	}
+	if deletedPolicies != 2 {
+		t.Fatalf("expected policy deletes 2, got %d", deletedPolicies)
+	}
+	if deletedServices != 1 {
+		t.Fatalf("expected service deletes 1, got %d", deletedServices)
+	}
+}
+
+func TestReconcileWorkloadSkipsRunningWorkload(t *testing.T) {
+	ctx := context.Background()
+	workloadID := uuid.New()
+	exposure := store.Exposure{ID: uuid.New(), WorkloadID: workloadID}
+
+	listCalls := 0
+	deleted := 0
+	storeMock := &mockReconcilerStore{
+		listByWorkloadAll: func(_ context.Context, id uuid.UUID) ([]store.Exposure, error) {
+			listCalls++
+			return []store.Exposure{exposure}, nil
+		},
+		deleteExposure: func(_ context.Context, id uuid.UUID) error {
+			deleted++
+			return nil
+		},
+	}
+
+	runners := &mockRunners{
+		getWorkload: func(_ context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+			return &runnersv1.GetWorkloadResponse{
+				Workload: &runnersv1.Workload{Status: runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING},
+			}, nil
+		},
+	}
+
+	reconciler := New(storeMock, &mockZitiMgmt{}, runners, nil, time.Second)
+	reconciler.reconcileWorkload(ctx, workloadID)
+
+	if listCalls != 0 {
+		t.Fatalf("expected no list calls, got %d", listCalls)
 	}
 	if deleted != 0 {
 		t.Fatalf("expected no deletes, got %d", deleted)

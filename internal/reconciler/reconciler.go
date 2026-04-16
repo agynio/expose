@@ -134,11 +134,12 @@ func (r *Reconciler) reconcileOrphaned(ctx context.Context) {
 		return
 	}
 	for _, exposure := range exposures {
-		_, err := r.runners.GetWorkload(ctx, &runnersv1.GetWorkloadRequest{Id: exposure.WorkloadID.String()})
+		resp, err := r.runners.GetWorkload(ctx, &runnersv1.GetWorkloadRequest{Id: exposure.WorkloadID.String()})
 		if err == nil {
-			continue
-		}
-		if !isNotFound(err) {
+			if !isTerminalWorkload(resp.GetWorkload()) {
+				continue
+			}
+		} else if !isNotFound(err) {
 			log.Printf("reconcile orphaned: get workload %s: %v", exposure.WorkloadID, err)
 			continue
 		}
@@ -173,11 +174,12 @@ func (r *Reconciler) reconcileRemoving(ctx context.Context) {
 }
 
 func (r *Reconciler) reconcileWorkload(ctx context.Context, workloadID uuid.UUID) {
-	_, err := r.runners.GetWorkload(ctx, &runnersv1.GetWorkloadRequest{Id: workloadID.String()})
+	resp, err := r.runners.GetWorkload(ctx, &runnersv1.GetWorkloadRequest{Id: workloadID.String()})
 	if err == nil {
-		return
-	}
-	if !isNotFound(err) {
+		if !isTerminalWorkload(resp.GetWorkload()) {
+			return
+		}
+	} else if !isNotFound(err) {
 		log.Printf("reconcile workload %s: get workload: %v", workloadID, err)
 		return
 	}
@@ -229,6 +231,22 @@ func (r *Reconciler) deleteService(ctx context.Context, id string) error {
 		return nil
 	}
 	return err
+}
+
+func isTerminalWorkload(workload *runnersv1.Workload) bool {
+	if workload == nil {
+		return false
+	}
+	if workload.GetRemovedAt() != nil {
+		return true
+	}
+	switch workload.GetStatus() {
+	case runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED,
+		runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED:
+		return true
+	default:
+		return false
+	}
 }
 
 func isNotFound(err error) bool {
