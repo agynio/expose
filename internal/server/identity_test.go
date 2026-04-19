@@ -16,12 +16,9 @@ func TestResolveExposureCallerAgent(t *testing.T) {
 	agentID := uuid.New().String()
 	ctx := contextWithIdentity(agentID, string(identityTypeAgent), workloadID)
 
-	caller, err := resolveExposureCaller(ctx, nil)
+	caller, err := resolveExposureCaller(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if caller.isClusterAdmin {
-		t.Fatalf("expected non-cluster admin caller")
 	}
 	if caller.identity.identityID != agentID {
 		t.Fatalf("expected identity id %s, got %s", agentID, caller.identity.identityID)
@@ -31,9 +28,20 @@ func TestResolveExposureCallerAgent(t *testing.T) {
 	}
 }
 
-func TestResolveExposureCallerClusterAdmin(t *testing.T) {
+func TestResolveExposureCallerUser(t *testing.T) {
+	ctx := contextWithIdentity("user-id", string(identityTypeUser), "")
+
+	caller, err := resolveExposureCaller(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if caller.identity.identityType != identityTypeUser {
+		t.Fatalf("expected user identity, got %s", caller.identity.identityType)
+	}
+}
+
+func TestRequireClusterAdmin(t *testing.T) {
 	clusterAdminID := "cluster-admin"
-	ctx := contextWithIdentity(clusterAdminID, string(identityTypeUser), "")
 	authz := &mockAuthz{check: func(_ context.Context, req *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
 		if req.GetTupleKey().GetUser() != identityUserPrefix+clusterAdminID {
 			return nil, errors.New("unexpected user")
@@ -47,71 +55,86 @@ func TestResolveExposureCallerClusterAdmin(t *testing.T) {
 		return &authorizationv1.CheckResponse{Allowed: true}, nil
 	}}
 
-	caller, err := resolveExposureCaller(ctx, authz)
-	if err != nil {
+	if err := requireClusterAdmin(context.Background(), authz, clusterAdminID); err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if !caller.isClusterAdmin {
-		t.Fatalf("expected cluster admin caller")
 	}
 }
 
-func TestResolveExposureCallerRejectsNonAgent(t *testing.T) {
-	ctx := contextWithIdentity("user-id", string(identityTypeUser), "")
+func TestRequireClusterAdminDenied(t *testing.T) {
 	authz := &mockAuthz{check: func(_ context.Context, _ *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
 		return &authorizationv1.CheckResponse{Allowed: false}, nil
 	}}
-	_, err := resolveExposureCaller(ctx, authz)
+
+	err := requireClusterAdmin(context.Background(), authz, "user-id")
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected permission denied, got %v", err)
 	}
 }
 
-func TestResolveExposureCallerAuthzError(t *testing.T) {
-	ctx := contextWithIdentity("user-id", string(identityTypeUser), "")
-	authz := &mockAuthz{check: func(_ context.Context, _ *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
-		return nil, errors.New("boom")
-	}}
-	_, err := resolveExposureCaller(ctx, authz)
-	if status.Code(err) != codes.Internal {
-		t.Fatalf("expected internal error, got %v", err)
-	}
-}
-
-func TestResolveAddExposureIDsDefaults(t *testing.T) {
+func TestResolveWorkloadIDFromRequestUsesCaller(t *testing.T) {
 	caller := exposureCaller{identity: resolvedIdentity{
-		identityID:   "agent-id",
 		identityType: identityTypeAgent,
 		workloadID:   "workload-id",
 	}}
-	workloadID, agentID, err := resolveAddExposureIDs(caller, "", "")
+	workloadID, err := resolveWorkloadIDFromRequest(caller, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if workloadID != "workload-id" {
-		t.Fatalf("expected workload id to default")
-	}
-	if agentID != "agent-id" {
-		t.Fatalf("expected agent id to default")
+		t.Fatalf("expected workload id, got %s", workloadID)
 	}
 }
 
-func TestResolveAddExposureIDsMismatch(t *testing.T) {
-	caller := exposureCaller{identity: resolvedIdentity{
-		identityID:   "agent-id",
-		identityType: identityTypeAgent,
-		workloadID:   "workload-id",
-	}}
-	_, _, err := resolveAddExposureIDs(caller, "other", "")
+func TestResolveWorkloadIDFromRequestExplicit(t *testing.T) {
+	caller := exposureCaller{identity: resolvedIdentity{identityType: identityTypeUser}}
+	workloadID, err := resolveWorkloadIDFromRequest(caller, "workload-123")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if workloadID != "workload-123" {
+		t.Fatalf("expected explicit workload id, got %s", workloadID)
+	}
+}
+
+func TestResolveWorkloadIDFromRequestRequiresWorkload(t *testing.T) {
+	caller := exposureCaller{identity: resolvedIdentity{identityType: identityTypeUser}}
+	_, err := resolveWorkloadIDFromRequest(caller, "")
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected invalid argument, got %v", err)
+	}
+}
+
+func TestEnsureIDMatchMismatch(t *testing.T) {
+	err := ensureIDMatch(uuid.NewString(), uuid.NewString(), "agent")
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected permission denied, got %v", err)
 	}
 }
 
-func TestResolveWorkloadIDClusterAdminRequired(t *testing.T) {
-	caller := exposureCaller{isClusterAdmin: true}
-	_, err := resolveWorkloadID(caller, "")
+func TestEnsureIDMatchInvalidArgument(t *testing.T) {
+	err := ensureIDMatch(uuid.NewString(), "not-a-uuid", "agent")
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected invalid argument, got %v", err)
+	}
+}
+
+func TestRequireOrgRelation(t *testing.T) {
+	identityID := "identity-id"
+	orgID := "org-id"
+	authz := &mockAuthz{check: func(_ context.Context, req *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
+		if req.GetTupleKey().GetUser() != identityUserPrefix+identityID {
+			return nil, errors.New("unexpected user")
+		}
+		if req.GetTupleKey().GetRelation() != organizationOwnerRelation {
+			return nil, errors.New("unexpected relation")
+		}
+		if req.GetTupleKey().GetObject() != organizationObjectPrefix+orgID {
+			return nil, errors.New("unexpected object")
+		}
+		return &authorizationv1.CheckResponse{Allowed: true}, nil
+	}}
+
+	if err := requireOrgRelation(context.Background(), authz, identityID, orgID, organizationOwnerRelation); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

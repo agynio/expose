@@ -6,18 +6,22 @@ import (
 	"strings"
 
 	authorizationv1 "github.com/agynio/expose/.gen/go/agynio/api/authorization/v1"
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
 const (
-	identityIDMetadataKey   = "x-identity-id"
-	identityTypeMetadataKey = "x-identity-type"
-	workloadIDMetadataKey   = "x-workload-id"
-	clusterAdminRelation    = "admin"
-	clusterAdminObject      = "cluster:global"
-	identityUserPrefix      = "identity:"
+	identityIDMetadataKey      = "x-identity-id"
+	identityTypeMetadataKey    = "x-identity-type"
+	workloadIDMetadataKey      = "x-workload-id"
+	clusterAdminRelation       = "admin"
+	clusterAdminObject         = "cluster:global"
+	identityUserPrefix         = "identity:"
+	organizationObjectPrefix   = "organization:"
+	organizationOwnerRelation  = "owner"
+	organizationMemberRelation = "member"
 )
 
 type identityType string
@@ -36,32 +40,13 @@ type resolvedIdentity struct {
 }
 
 type exposureCaller struct {
-	identity       resolvedIdentity
-	isClusterAdmin bool
+	identity resolvedIdentity
 }
 
-func resolveExposureCaller(ctx context.Context, authz authorizationv1.AuthorizationServiceClient) (exposureCaller, error) {
+func resolveExposureCaller(ctx context.Context) (exposureCaller, error) {
 	resolved, err := identityFromContext(ctx)
 	if err != nil {
 		return exposureCaller{}, err
-	}
-	if resolved.identityType != identityTypeAgent {
-		allowed, err := checkClusterAdmin(ctx, authz, resolved.identityID)
-		if err != nil {
-			return exposureCaller{}, err
-		}
-		if !allowed {
-			return exposureCaller{}, status.Error(codes.PermissionDenied, "identity is not authorized")
-		}
-		return exposureCaller{identity: resolved, isClusterAdmin: true}, nil
-	}
-	identityID := resolved.identityID
-	if identityID == "" {
-		return exposureCaller{}, status.Error(codes.Internal, "agent id missing for agent identity")
-	}
-	workloadID := resolved.workloadID
-	if workloadID == "" {
-		return exposureCaller{}, status.Error(codes.Internal, "workload id missing for agent identity")
 	}
 	return exposureCaller{identity: resolved}, nil
 }
@@ -83,50 +68,69 @@ func checkClusterAdmin(ctx context.Context, authz authorizationv1.AuthorizationS
 	return resp.GetAllowed(), nil
 }
 
-func resolveAddExposureIDs(caller exposureCaller, workloadID, agentID string) (string, string, error) {
-	if caller.isClusterAdmin {
-		resolvedWorkloadID, err := requireClusterAdminID(workloadID, "workload")
-		if err != nil {
-			return "", "", err
-		}
-		resolvedAgentID, err := requireClusterAdminID(agentID, "agent")
-		if err != nil {
-			return "", "", err
-		}
-		return resolvedWorkloadID, resolvedAgentID, nil
-	}
-	resolvedWorkloadID, err := resolveAgentIDMatch(caller.identity.workloadID, workloadID, "workload")
+func requireClusterAdmin(ctx context.Context, authz authorizationv1.AuthorizationServiceClient, identityID string) error {
+	allowed, err := checkClusterAdmin(ctx, authz, identityID)
 	if err != nil {
-		return "", "", err
+		return err
 	}
-	resolvedAgentID, err := resolveAgentIDMatch(caller.identity.identityID, agentID, "agent")
-	if err != nil {
-		return "", "", err
+	if !allowed {
+		return status.Error(codes.PermissionDenied, "identity is not authorized")
 	}
-	return resolvedWorkloadID, resolvedAgentID, nil
+	return nil
 }
 
-func resolveWorkloadID(caller exposureCaller, workloadID string) (string, error) {
-	if caller.isClusterAdmin {
-		return requireClusterAdminID(workloadID, "workload")
+func resolveWorkloadIDFromRequest(caller exposureCaller, workloadID string) (string, error) {
+	trimmed := strings.TrimSpace(workloadID)
+	if trimmed != "" {
+		return trimmed, nil
 	}
-	return resolveAgentIDMatch(caller.identity.workloadID, workloadID, "workload")
+	if caller.identity.identityType != identityTypeAgent {
+		return "", status.Error(codes.InvalidArgument, "workload id is required")
+	}
+	callerWorkloadID := strings.TrimSpace(caller.identity.workloadID)
+	if callerWorkloadID == "" {
+		return "", status.Error(codes.Unauthenticated, "workload id missing for agent identity")
+	}
+	return callerWorkloadID, nil
 }
 
-func requireClusterAdminID(value, label string) (string, error) {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return "", status.Error(codes.InvalidArgument, label+" id required for cluster admin")
-	}
-	return trimmed, nil
-}
-
-func resolveAgentIDMatch(expectedID, providedID, label string) (string, error) {
+func ensureIDMatch(expectedID, providedID, label string) error {
 	trimmed := strings.TrimSpace(providedID)
-	if trimmed != "" && trimmed != expectedID {
-		return "", status.Error(codes.PermissionDenied, label+" id does not match identity")
+	if trimmed == "" {
+		return nil
 	}
-	return expectedID, nil
+	parsedProvided, err := uuid.Parse(trimmed)
+	if err != nil {
+		return status.Errorf(codes.InvalidArgument, "%s id must be a valid UUID: %v", label, err)
+	}
+	expectedParsed, err := uuid.Parse(strings.TrimSpace(expectedID))
+	if err != nil {
+		return status.Errorf(codes.Internal, "expected %s id invalid: %v", label, err)
+	}
+	if parsedProvided != expectedParsed {
+		return status.Error(codes.PermissionDenied, label+" id does not match workload")
+	}
+	return nil
+}
+
+func requireOrgRelation(ctx context.Context, authz authorizationv1.AuthorizationServiceClient, identityID, organizationID, relation string) error {
+	if identityID == "" || organizationID == "" {
+		return status.Error(codes.Internal, "identity or organization id missing for authorization check")
+	}
+	resp, err := authz.Check(ctx, &authorizationv1.CheckRequest{
+		TupleKey: &authorizationv1.TupleKey{
+			User:     identityUserPrefix + identityID,
+			Relation: relation,
+			Object:   organizationObjectPrefix + organizationID,
+		},
+	})
+	if err != nil {
+		return status.Errorf(codes.Internal, "authorization check failed: %v", err)
+	}
+	if !resp.GetAllowed() {
+		return status.Error(codes.PermissionDenied, "permission denied")
+	}
+	return nil
 }
 
 func identityFromContext(ctx context.Context) (resolvedIdentity, error) {
@@ -168,4 +172,15 @@ func metadataValue(md metadata.MD, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(values[0])
+}
+
+func outgoingContextWithIdentity(ctx context.Context, identity resolvedIdentity) context.Context {
+	md := metadata.Pairs(
+		identityIDMetadataKey, identity.identityID,
+		identityTypeMetadataKey, string(identity.identityType),
+	)
+	if identity.workloadID != "" {
+		md.Append(workloadIDMetadataKey, identity.workloadID)
+	}
+	return metadata.NewOutgoingContext(ctx, md)
 }
