@@ -49,11 +49,22 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 		return nil, err
 	}
 	explicitWorkloadID := strings.TrimSpace(req.GetWorkloadId())
-	workloadIDValue := explicitWorkloadID
+	var workloadID uuid.UUID
+	var agentID uuid.UUID
 	if explicitWorkloadID != "" {
 		if err := requireClusterAdmin(ctx, s.authz, caller.identity.identityID); err != nil {
 			return nil, err
 		}
+		parsedWorkloadID, err := parseUUID(explicitWorkloadID, "workload_id")
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		parsedAgentID, err := parseUUID(req.GetAgentId(), "agent_id")
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		workloadID = parsedWorkloadID
+		agentID = parsedAgentID
 	} else {
 		if caller.identity.identityType != identityTypeAgent {
 			return nil, status.Error(codes.PermissionDenied, "permission denied")
@@ -62,32 +73,32 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 		if err != nil {
 			return nil, err
 		}
-		workloadIDValue = resolvedWorkloadID
-	}
-	workloadID, err := parseUUID(workloadIDValue, "workload_id")
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		parsedWorkloadID, err := parseUUID(resolvedWorkloadID, "workload_id")
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		workloadID = parsedWorkloadID
 	}
 	port := req.GetPort()
 	if err := validatePort(port); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-
-	workload, err := s.fetchWorkload(ctx, caller, workloadID)
-	if err != nil {
-		return nil, err
-	}
-	agentID, err := workloadAgentID(workload)
-	if err != nil {
-		return nil, err
-	}
-	if err := ensureIDMatch(agentID.String(), req.GetAgentId(), "agent"); err != nil {
-		return nil, err
-	}
 	if explicitWorkloadID == "" {
-		if err := requireAgentSelf(caller, agentID); err != nil {
+		workload, err := s.fetchWorkload(ctx, caller, workloadID)
+		if err != nil {
 			return nil, err
 		}
+		agentIDValue, err := workloadAgentID(workload)
+		if err != nil {
+			return nil, err
+		}
+		if err := ensureIDMatch(agentIDValue.String(), req.GetAgentId(), "agent"); err != nil {
+			return nil, err
+		}
+		if err := requireAgentSelf(caller, agentIDValue); err != nil {
+			return nil, err
+		}
+		agentID = agentIDValue
 	}
 
 	exposureID := uuid.New()

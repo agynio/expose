@@ -105,9 +105,16 @@ func TestResolveWorkloadIDFromRequestRequiresWorkload(t *testing.T) {
 }
 
 func TestEnsureIDMatchMismatch(t *testing.T) {
-	err := ensureIDMatch("expected", "other", "agent")
+	err := ensureIDMatch(uuid.NewString(), uuid.NewString(), "agent")
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected permission denied, got %v", err)
+	}
+}
+
+func TestEnsureIDMatchInvalidArgument(t *testing.T) {
+	err := ensureIDMatch(uuid.NewString(), "not-a-uuid", "agent")
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected invalid argument, got %v", err)
 	}
 }
 

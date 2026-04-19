@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	authorizationv1 "github.com/agynio/expose/.gen/go/agynio/api/authorization/v1"
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -95,7 +96,18 @@ func resolveWorkloadIDFromRequest(caller exposureCaller, workloadID string) (str
 
 func ensureIDMatch(expectedID, providedID, label string) error {
 	trimmed := strings.TrimSpace(providedID)
-	if trimmed != "" && trimmed != expectedID {
+	if trimmed == "" {
+		return nil
+	}
+	parsedProvided, err := uuid.Parse(trimmed)
+	if err != nil {
+		return status.Errorf(codes.InvalidArgument, "%s id must be a valid UUID: %v", label, err)
+	}
+	expectedParsed, err := uuid.Parse(strings.TrimSpace(expectedID))
+	if err != nil {
+		return status.Errorf(codes.Internal, "expected %s id invalid: %v", label, err)
+	}
+	if parsedProvided != expectedParsed {
 		return status.Error(codes.PermissionDenied, label+" id does not match workload")
 	}
 	return nil

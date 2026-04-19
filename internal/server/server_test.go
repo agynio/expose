@@ -470,6 +470,7 @@ func TestAddExposureDuplicate(t *testing.T) {
 
 func TestAddExposureExplicitRequiresClusterAdmin(t *testing.T) {
 	workloadID := uuid.New()
+	agentID := uuid.New()
 	ctx := contextWithIdentity("user-id", string(identityTypeUser), "")
 
 	storeMock := &mockStore{createExposure: func(context.Context, store.Exposure) error {
@@ -477,7 +478,11 @@ func TestAddExposureExplicitRequiresClusterAdmin(t *testing.T) {
 	}}
 
 	svc := New(storeMock, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz())
-	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{WorkloadId: workloadID.String(), Port: 8080})
+	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{
+		WorkloadId: workloadID.String(),
+		AgentId:    agentID.String(),
+		Port:       8080,
+	})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected permission denied, got %v", err)
 	}
@@ -486,7 +491,6 @@ func TestAddExposureExplicitRequiresClusterAdmin(t *testing.T) {
 func TestAddExposureExplicitClusterAdmin(t *testing.T) {
 	workloadID := uuid.New()
 	agentID := uuid.New()
-	orgID := uuid.New()
 	userID := "user-id"
 	ctx := contextWithIdentity(userID, string(identityTypeUser), "")
 
@@ -523,17 +527,6 @@ func TestAddExposureExplicitClusterAdmin(t *testing.T) {
 		return &zitimanagementv1.CreateServicePolicyResponse{ZitiServicePolicyId: fmt.Sprintf("%s-id", suffix)}, nil
 	}
 
-	runnersMock := &mockRunners{getWorkload: func(ctx context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
-		assertOutgoingIdentity(t, ctx, userID, string(identityTypeUser), "")
-		if req.GetId() != workloadID.String() {
-			return nil, fmt.Errorf("unexpected workload id %s", req.GetId())
-		}
-		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
-			AgentId:        agentID.String(),
-			OrganizationId: orgID.String(),
-		}}, nil
-	}}
-
 	authz := &mockAuthz{check: func(_ context.Context, req *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
 		if req.GetTupleKey().GetUser() != identityUserPrefix+userID {
 			return nil, fmt.Errorf("unexpected user")
@@ -547,8 +540,12 @@ func TestAddExposureExplicitClusterAdmin(t *testing.T) {
 		return &authorizationv1.CheckResponse{Allowed: true}, nil
 	}}
 
-	svc := New(storeMock, zitiMock, runnersMock, authz)
-	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{WorkloadId: workloadID.String(), Port: 8080})
+	svc := New(storeMock, zitiMock, &mockRunners{}, authz)
+	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{
+		WorkloadId: workloadID.String(),
+		AgentId:    agentID.String(),
+		Port:       8080,
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
