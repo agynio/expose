@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 
 	authorizationv1 "github.com/agynio/expose/.gen/go/agynio/api/authorization/v1"
 	exposev1 "github.com/agynio/expose/.gen/go/agynio/api/expose/v1"
@@ -43,25 +44,50 @@ func New(store ExposureStore, zitiMgmt zitimanagementv1.ZitiManagementServiceCli
 }
 
 func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureRequest) (*exposev1.AddExposureResponse, error) {
-	caller, err := resolveExposureCaller(ctx, s.authz)
+	caller, err := resolveExposureCaller(ctx)
 	if err != nil {
 		return nil, err
 	}
-	workloadIDValue, agentIDValue, err := resolveAddExposureIDs(caller, req.GetWorkloadId(), req.GetAgentId())
-	if err != nil {
-		return nil, err
+	explicitWorkloadID := strings.TrimSpace(req.GetWorkloadId())
+	workloadIDValue := explicitWorkloadID
+	if explicitWorkloadID != "" {
+		if err := requireClusterAdmin(ctx, s.authz, caller.identity.identityID); err != nil {
+			return nil, err
+		}
+	} else {
+		if caller.identity.identityType != identityTypeAgent {
+			return nil, status.Error(codes.PermissionDenied, "permission denied")
+		}
+		resolvedWorkloadID, err := resolveWorkloadIDFromRequest(caller, "")
+		if err != nil {
+			return nil, err
+		}
+		workloadIDValue = resolvedWorkloadID
 	}
 	workloadID, err := parseUUID(workloadIDValue, "workload_id")
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
-	}
-	agentID, err := parseUUID(agentIDValue, "agent_id")
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	port := req.GetPort()
 	if err := validatePort(port); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	workload, err := s.fetchWorkload(ctx, caller, workloadID)
+	if err != nil {
+		return nil, err
+	}
+	agentID, err := workloadAgentID(workload)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureIDMatch(agentID.String(), req.GetAgentId(), "agent"); err != nil {
+		return nil, err
+	}
+	if explicitWorkloadID == "" {
+		if err := requireAgentSelf(caller, agentID); err != nil {
+			return nil, err
+		}
 	}
 
 	exposureID := uuid.New()
@@ -74,13 +100,6 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 	}
 	if err := s.store.CreateExposure(ctx, exposure); err != nil {
 		return nil, toStatusError(err)
-	}
-
-	if _, err := s.runners.GetWorkload(ctx, &runnersv1.GetWorkloadRequest{Id: workloadID.String()}); err != nil {
-		if cleanupErr := s.store.DeleteExposure(ctx, exposureID); cleanupErr != nil && !errors.Is(cleanupErr, store.ErrExposureNotFound) {
-			log.Printf("failed to delete exposure %s after workload lookup error: %v", exposureID, cleanupErr)
-		}
-		return nil, status.Errorf(codes.FailedPrecondition, "workload not found: %v", err)
 	}
 
 	serviceName := fmt.Sprintf("exposed-%s", exposureID)
@@ -148,11 +167,11 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 }
 
 func (s *Server) RemoveExposure(ctx context.Context, req *exposev1.RemoveExposureRequest) (*exposev1.RemoveExposureResponse, error) {
-	caller, err := resolveExposureCaller(ctx, s.authz)
+	caller, err := resolveExposureCaller(ctx)
 	if err != nil {
 		return nil, err
 	}
-	workloadIDValue, err := resolveWorkloadID(caller, req.GetWorkloadId())
+	workloadIDValue, err := resolveWorkloadIDFromRequest(caller, req.GetWorkloadId())
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +182,28 @@ func (s *Server) RemoveExposure(ctx context.Context, req *exposev1.RemoveExposur
 	port := req.GetPort()
 	if err := validatePort(port); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	workload, err := s.fetchWorkload(ctx, caller, workloadID)
+	if err != nil {
+		return nil, err
+	}
+	agentID, err := workloadAgentID(workload)
+	if err != nil {
+		return nil, err
+	}
+	orgID, err := workloadOrganizationID(workload)
+	if err != nil {
+		return nil, err
+	}
+	allowed, err := agentMatchesWorkload(caller, agentID)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		if err := requireOrgRelation(ctx, s.authz, caller.identity.identityID, orgID.String(), organizationOwnerRelation); err != nil {
+			return nil, err
+		}
 	}
 
 	exposure, err := s.store.GetExposureByWorkloadAndPort(ctx, workloadID, port)
@@ -183,17 +224,38 @@ func (s *Server) RemoveExposure(ctx context.Context, req *exposev1.RemoveExposur
 }
 
 func (s *Server) ListExposures(ctx context.Context, req *exposev1.ListExposuresRequest) (*exposev1.ListExposuresResponse, error) {
-	caller, err := resolveExposureCaller(ctx, s.authz)
+	caller, err := resolveExposureCaller(ctx)
 	if err != nil {
 		return nil, err
 	}
-	workloadIDValue, err := resolveWorkloadID(caller, req.GetWorkloadId())
+	workloadIDValue, err := resolveWorkloadIDFromRequest(caller, req.GetWorkloadId())
 	if err != nil {
 		return nil, err
 	}
 	workloadID, err := parseUUID(workloadIDValue, "workload_id")
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	workload, err := s.fetchWorkload(ctx, caller, workloadID)
+	if err != nil {
+		return nil, err
+	}
+	agentID, err := workloadAgentID(workload)
+	if err != nil {
+		return nil, err
+	}
+	orgID, err := workloadOrganizationID(workload)
+	if err != nil {
+		return nil, err
+	}
+	allowed, err := agentMatchesWorkload(caller, agentID)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		if err := requireOrgRelation(ctx, s.authz, caller.identity.identityID, orgID.String(), organizationMemberRelation); err != nil {
+			return nil, err
+		}
 	}
 	var cursor *store.PageCursor
 	if token := req.GetPageToken(); token != "" {
@@ -303,6 +365,85 @@ func (s *Server) deleteService(ctx context.Context, id string) error {
 	}
 	_, err := s.zitiMgmt.DeleteService(ctx, &zitimanagementv1.DeleteServiceRequest{ZitiServiceId: id})
 	return err
+}
+
+func (s *Server) fetchWorkload(ctx context.Context, caller exposureCaller, workloadID uuid.UUID) (*runnersv1.Workload, error) {
+	resp, err := s.runners.GetWorkload(outgoingContextWithIdentity(ctx, caller.identity), &runnersv1.GetWorkloadRequest{Id: workloadID.String()})
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return nil, status.Errorf(codes.FailedPrecondition, "workload not found: %v", err)
+		}
+		return nil, err
+	}
+	workload := resp.GetWorkload()
+	if workload == nil {
+		return nil, status.Error(codes.Internal, "workload missing from response")
+	}
+	return workload, nil
+}
+
+func workloadAgentID(workload *runnersv1.Workload) (uuid.UUID, error) {
+	if workload == nil {
+		return uuid.UUID{}, status.Error(codes.Internal, "workload missing")
+	}
+	agentID := strings.TrimSpace(workload.GetAgentId())
+	if agentID == "" {
+		return uuid.UUID{}, status.Error(codes.Internal, "workload agent_id missing")
+	}
+	parsed, err := parseUUID(agentID, "agent_id")
+	if err != nil {
+		return uuid.UUID{}, status.Errorf(codes.Internal, "workload agent_id invalid: %v", err)
+	}
+	return parsed, nil
+}
+
+func workloadOrganizationID(workload *runnersv1.Workload) (uuid.UUID, error) {
+	if workload == nil {
+		return uuid.UUID{}, status.Error(codes.Internal, "workload missing")
+	}
+	orgID := strings.TrimSpace(workload.GetOrganizationId())
+	if orgID == "" {
+		return uuid.UUID{}, status.Error(codes.Internal, "workload organization_id missing")
+	}
+	parsed, err := parseUUID(orgID, "organization_id")
+	if err != nil {
+		return uuid.UUID{}, status.Errorf(codes.Internal, "workload organization_id invalid: %v", err)
+	}
+	return parsed, nil
+}
+
+func agentMatchesWorkload(caller exposureCaller, agentID uuid.UUID) (bool, error) {
+	if caller.identity.identityType != identityTypeAgent {
+		return false, nil
+	}
+	callerID, err := parseIdentityUUID(caller.identity.identityID)
+	if err != nil {
+		return false, err
+	}
+	return callerID == agentID, nil
+}
+
+func requireAgentSelf(caller exposureCaller, agentID uuid.UUID) error {
+	allowed, err := agentMatchesWorkload(caller, agentID)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return status.Error(codes.PermissionDenied, "agent id does not match workload")
+	}
+	return nil
+}
+
+func parseIdentityUUID(value string) (uuid.UUID, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return uuid.UUID{}, status.Error(codes.Unauthenticated, "identity id missing")
+	}
+	parsed, err := uuid.Parse(trimmed)
+	if err != nil {
+		return uuid.UUID{}, status.Errorf(codes.Unauthenticated, "identity id invalid: %v", err)
+	}
+	return parsed, nil
 }
 
 func validatePort(port int32) error {

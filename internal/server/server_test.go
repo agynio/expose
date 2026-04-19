@@ -279,6 +279,27 @@ func contextWithAgentIdentity(agentID, workloadID uuid.UUID) context.Context {
 	return contextWithIdentity(agentID.String(), string(identityTypeAgent), workloadID.String())
 }
 
+func assertOutgoingIdentity(t *testing.T, ctx context.Context, identityID, identityType, workloadID string) {
+	t.Helper()
+	md, ok := metadata.FromOutgoingContext(ctx)
+	if !ok {
+		t.Fatal("expected outgoing metadata")
+	}
+	if value := metadataValue(md, identityIDMetadataKey); value != identityID {
+		t.Fatalf("expected identity id %s, got %s", identityID, value)
+	}
+	if value := metadataValue(md, identityTypeMetadataKey); value != identityType {
+		t.Fatalf("expected identity type %s, got %s", identityType, value)
+	}
+	if workloadID != "" {
+		if value := metadataValue(md, workloadIDMetadataKey); value != workloadID {
+			t.Fatalf("expected workload id %s, got %s", workloadID, value)
+		}
+	} else if value := metadataValue(md, workloadIDMetadataKey); value != "" {
+		t.Fatalf("expected no workload id, got %s", value)
+	}
+}
+
 func defaultAuthz() authorizationv1.AuthorizationServiceClient {
 	return &mockAuthz{check: func(context.Context, *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
 		return &authorizationv1.CheckResponse{Allowed: false}, nil
@@ -288,6 +309,7 @@ func defaultAuthz() authorizationv1.AuthorizationServiceClient {
 func TestAddExposureHappyPath(t *testing.T) {
 	workloadID := uuid.New()
 	agentID := uuid.New()
+	orgID := uuid.New()
 	ctx := contextWithAgentIdentity(agentID, workloadID)
 	createdAt := time.Now().UTC()
 	updatedAt := createdAt.Add(time.Minute)
@@ -348,19 +370,19 @@ func TestAddExposureHappyPath(t *testing.T) {
 	}
 
 	runnersMock := &mockRunners{}
-	runnersMock.getWorkload = func(_ context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+	runnersMock.getWorkload = func(ctx context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 		if req.GetId() != workloadID.String() {
 			return nil, fmt.Errorf("unexpected workload id %s", req.GetId())
 		}
-		return &runnersv1.GetWorkloadResponse{}, nil
+		assertOutgoingIdentity(t, ctx, agentID.String(), string(identityTypeAgent), workloadID.String())
+		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
+			AgentId:        agentID.String(),
+			OrganizationId: orgID.String(),
+		}}, nil
 	}
 
 	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz())
-	resp, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{
-		WorkloadId: workloadID.String(),
-		AgentId:    agentID.String(),
-		Port:       8080,
-	})
+	resp, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 8080})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -417,11 +439,7 @@ func TestAddExposureInvalidPort(t *testing.T) {
 	agentID := uuid.New()
 	ctx := contextWithAgentIdentity(agentID, workloadID)
 	svc := New(&mockStore{}, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz())
-	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{
-		WorkloadId: workloadID.String(),
-		AgentId:    agentID.String(),
-		Port:       70000,
-	})
+	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 70000})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected invalid argument, got %v", err)
 	}
@@ -435,32 +453,136 @@ func TestAddExposureDuplicate(t *testing.T) {
 	}
 	workloadID := uuid.New()
 	agentID := uuid.New()
+	orgID := uuid.New()
 	ctx := contextWithAgentIdentity(agentID, workloadID)
-	svc := New(storeMock, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz())
-	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{
-		WorkloadId: workloadID.String(),
-		AgentId:    agentID.String(),
-		Port:       8080,
-	})
+	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
+			AgentId:        agentID.String(),
+			OrganizationId: orgID.String(),
+		}}, nil
+	}}
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
+	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 8080})
 	if status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("expected already exists, got %v", err)
 	}
 }
 
-func TestAddExposureWorkloadNotFound(t *testing.T) {
+func TestAddExposureExplicitRequiresClusterAdmin(t *testing.T) {
+	workloadID := uuid.New()
+	ctx := contextWithIdentity("user-id", string(identityTypeUser), "")
+
+	storeMock := &mockStore{createExposure: func(context.Context, store.Exposure) error {
+		return fmt.Errorf("unexpected create call")
+	}}
+
+	svc := New(storeMock, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz())
+	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{WorkloadId: workloadID.String(), Port: 8080})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected permission denied, got %v", err)
+	}
+}
+
+func TestAddExposureExplicitClusterAdmin(t *testing.T) {
+	workloadID := uuid.New()
+	agentID := uuid.New()
+	orgID := uuid.New()
+	userID := "user-id"
+	ctx := contextWithIdentity(userID, string(identityTypeUser), "")
+
+	storeMock := &mockStore{}
 	var created store.Exposure
-	deleted := 0
+	storeMock.createExposure = func(_ context.Context, exposure store.Exposure) error {
+		created = exposure
+		return nil
+	}
+	storeMock.updateExposureProvisioned = func(context.Context, uuid.UUID, store.ExposureResourceIDs) error {
+		return nil
+	}
+	storeMock.getExposure = func(_ context.Context, id uuid.UUID) (store.Exposure, error) {
+		return store.Exposure{
+			ID:         id,
+			WorkloadID: workloadID,
+			AgentID:    agentID,
+			Port:       8080,
+			Status:     store.ExposureStatusActive,
+			CreatedAt:  time.Now(),
+			UpdatedAt:  time.Now(),
+		}, nil
+	}
+
+	zitiMock := &mockZitiMgmt{}
+	zitiMock.createService = func(_ context.Context, req *zitimanagementv1.CreateServiceRequest) (*zitimanagementv1.CreateServiceResponse, error) {
+		return &zitimanagementv1.CreateServiceResponse{ZitiServiceId: "svc-id"}, nil
+	}
+	zitiMock.createServicePolicy = func(_ context.Context, req *zitimanagementv1.CreateServicePolicyRequest) (*zitimanagementv1.CreateServicePolicyResponse, error) {
+		suffix := "bind"
+		if req.GetType() == zitimanagementv1.ServicePolicyType_SERVICE_POLICY_TYPE_DIAL {
+			suffix = "dial"
+		}
+		return &zitimanagementv1.CreateServicePolicyResponse{ZitiServicePolicyId: fmt.Sprintf("%s-id", suffix)}, nil
+	}
+
+	runnersMock := &mockRunners{getWorkload: func(ctx context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+		assertOutgoingIdentity(t, ctx, userID, string(identityTypeUser), "")
+		if req.GetId() != workloadID.String() {
+			return nil, fmt.Errorf("unexpected workload id %s", req.GetId())
+		}
+		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
+			AgentId:        agentID.String(),
+			OrganizationId: orgID.String(),
+		}}, nil
+	}}
+
+	authz := &mockAuthz{check: func(_ context.Context, req *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
+		if req.GetTupleKey().GetUser() != identityUserPrefix+userID {
+			return nil, fmt.Errorf("unexpected user")
+		}
+		if req.GetTupleKey().GetRelation() != clusterAdminRelation {
+			return nil, fmt.Errorf("unexpected relation")
+		}
+		if req.GetTupleKey().GetObject() != clusterAdminObject {
+			return nil, fmt.Errorf("unexpected object")
+		}
+		return &authorizationv1.CheckResponse{Allowed: true}, nil
+	}}
+
+	svc := New(storeMock, zitiMock, runnersMock, authz)
+	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{WorkloadId: workloadID.String(), Port: 8080})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if created.AgentID != agentID {
+		t.Fatalf("expected agent id %s, got %s", agentID, created.AgentID)
+	}
+}
+
+func TestAddExposureAgentMismatch(t *testing.T) {
+	workloadID := uuid.New()
+	ctx := contextWithIdentity(uuid.New().String(), string(identityTypeAgent), workloadID.String())
+
+	storeMock := &mockStore{createExposure: func(context.Context, store.Exposure) error {
+		return fmt.Errorf("unexpected create call")
+	}}
+
+	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
+			AgentId:        uuid.New().String(),
+			OrganizationId: uuid.New().String(),
+		}}, nil
+	}}
+
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
+	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 8080})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected permission denied, got %v", err)
+	}
+}
+
+func TestAddExposureWorkloadNotFound(t *testing.T) {
 	storeMock := &mockStore{
 		createExposure: func(_ context.Context, exposure store.Exposure) error {
-			created = exposure
-			return nil
-		},
-		deleteExposure: func(_ context.Context, id uuid.UUID) error {
-			if id != created.ID {
-				return fmt.Errorf("unexpected exposure id")
-			}
-			deleted++
-			return nil
+			return fmt.Errorf("unexpected create call")
 		},
 	}
 
@@ -474,16 +596,9 @@ func TestAddExposureWorkloadNotFound(t *testing.T) {
 	ctx := contextWithAgentIdentity(agentID, workloadID)
 
 	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
-	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{
-		WorkloadId: workloadID.String(),
-		AgentId:    agentID.String(),
-		Port:       8080,
-	})
+	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 8080})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("expected failed precondition, got %v", err)
-	}
-	if deleted != 1 {
-		t.Fatalf("expected delete called once, got %d", deleted)
 	}
 }
 
@@ -524,21 +639,21 @@ func TestAddExposureBindPolicyCleanupSuccess(t *testing.T) {
 		return &zitimanagementv1.DeleteServiceResponse{}, nil
 	}
 
-	runnersMock := &mockRunners{
-		getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
-			return &runnersv1.GetWorkloadResponse{}, nil
-		},
-	}
 	workloadID := uuid.New()
 	agentID := uuid.New()
+
+	runnersMock := &mockRunners{
+		getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+			return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
+				AgentId:        agentID.String(),
+				OrganizationId: uuid.New().String(),
+			}}, nil
+		},
+	}
 	ctx := contextWithAgentIdentity(agentID, workloadID)
 
 	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz())
-	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{
-		WorkloadId: workloadID.String(),
-		AgentId:    agentID.String(),
-		Port:       8080,
-	})
+	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 8080})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected internal error, got %v", err)
 	}
@@ -585,21 +700,21 @@ func TestAddExposureBindPolicyCleanupFail(t *testing.T) {
 		return nil, status.Error(codes.Internal, "cleanup failed")
 	}
 
-	runnersMock := &mockRunners{
-		getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
-			return &runnersv1.GetWorkloadResponse{}, nil
-		},
-	}
 	workloadID := uuid.New()
 	agentID := uuid.New()
+
+	runnersMock := &mockRunners{
+		getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+			return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
+				AgentId:        agentID.String(),
+				OrganizationId: uuid.New().String(),
+			}}, nil
+		},
+	}
 	ctx := contextWithAgentIdentity(agentID, workloadID)
 
 	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz())
-	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{
-		WorkloadId: workloadID.String(),
-		AgentId:    agentID.String(),
-		Port:       8080,
-	})
+	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 8080})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected internal error, got %v", err)
 	}
@@ -633,9 +748,16 @@ func TestRemoveExposureNotFound(t *testing.T) {
 	}
 	workloadID := uuid.New()
 	agentID := uuid.New()
+	orgID := uuid.New()
 	ctx := contextWithAgentIdentity(agentID, workloadID)
 
-	svc := New(storeMock, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz())
+	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
+			AgentId:        agentID.String(),
+			OrganizationId: orgID.String(),
+		}}, nil
+	}}
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
 	_, err := svc.RemoveExposure(ctx, &exposev1.RemoveExposureRequest{
 		WorkloadId: workloadID.String(),
 		Port:       8080,
@@ -688,8 +810,15 @@ func TestRemoveExposureSuccess(t *testing.T) {
 	}
 
 	agentID := uuid.New()
+	orgID := uuid.New()
 	ctx := contextWithAgentIdentity(agentID, exposure.WorkloadID)
-	svc := New(storeMock, zitiMock, &mockRunners{}, defaultAuthz())
+	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
+			AgentId:        agentID.String(),
+			OrganizationId: orgID.String(),
+		}}, nil
+	}}
+	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz())
 	_, err := svc.RemoveExposure(ctx, &exposev1.RemoveExposureRequest{
 		WorkloadId: exposure.WorkloadID.String(),
 		Port:       exposure.Port,
@@ -708,6 +837,73 @@ func TestRemoveExposureSuccess(t *testing.T) {
 	}
 	if deletedServices != 1 {
 		t.Fatalf("expected service deletes 1, got %d", deletedServices)
+	}
+}
+
+func TestRemoveExposureOrgOwner(t *testing.T) {
+	exposure := store.Exposure{
+		ID:                   uuid.New(),
+		WorkloadID:           uuid.New(),
+		Port:                 8080,
+		OpenZitiServiceID:    "svc-id",
+		OpenZitiBindPolicyID: "bind-id",
+		OpenZitiDialPolicyID: "dial-id",
+	}
+
+	storeMock := &mockStore{
+		getExposureByWorkloadAndPort: func(_ context.Context, id uuid.UUID, port int32) (store.Exposure, error) {
+			return exposure, nil
+		},
+		updateExposureStatus: func(_ context.Context, id uuid.UUID, status store.ExposureStatus) error {
+			return nil
+		},
+		deleteExposure: func(_ context.Context, id uuid.UUID) error {
+			return nil
+		},
+		updateExposureFailed: func(_ context.Context, id uuid.UUID, resources store.ExposureResourceIDs) error {
+			return nil
+		},
+	}
+
+	zitiMock := &mockZitiMgmt{
+		deleteServicePolicy: func(_ context.Context, req *zitimanagementv1.DeleteServicePolicyRequest) (*zitimanagementv1.DeleteServicePolicyResponse, error) {
+			return &zitimanagementv1.DeleteServicePolicyResponse{}, nil
+		},
+		deleteService: func(_ context.Context, req *zitimanagementv1.DeleteServiceRequest) (*zitimanagementv1.DeleteServiceResponse, error) {
+			return &zitimanagementv1.DeleteServiceResponse{}, nil
+		},
+	}
+
+	orgID := uuid.New()
+	agentID := uuid.New()
+	userID := "user-id"
+	ctx := contextWithIdentity(userID, string(identityTypeUser), "")
+	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
+			AgentId:        agentID.String(),
+			OrganizationId: orgID.String(),
+		}}, nil
+	}}
+	authz := &mockAuthz{check: func(_ context.Context, req *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
+		if req.GetTupleKey().GetUser() != identityUserPrefix+userID {
+			return nil, fmt.Errorf("unexpected user")
+		}
+		if req.GetTupleKey().GetRelation() != organizationOwnerRelation {
+			return nil, fmt.Errorf("unexpected relation")
+		}
+		if req.GetTupleKey().GetObject() != organizationObjectPrefix+orgID.String() {
+			return nil, fmt.Errorf("unexpected object")
+		}
+		return &authorizationv1.CheckResponse{Allowed: true}, nil
+	}}
+
+	svc := New(storeMock, zitiMock, runnersMock, authz)
+	_, err := svc.RemoveExposure(ctx, &exposev1.RemoveExposureRequest{
+		WorkloadId: exposure.WorkloadID.String(),
+		Port:       exposure.Port,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -742,8 +938,15 @@ func TestRemoveExposureDeleteFailure(t *testing.T) {
 	}
 
 	agentID := uuid.New()
+	orgID := uuid.New()
 	ctx := contextWithAgentIdentity(agentID, exposure.WorkloadID)
-	svc := New(storeMock, zitiMock, &mockRunners{}, defaultAuthz())
+	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
+			AgentId:        agentID.String(),
+			OrganizationId: orgID.String(),
+		}}, nil
+	}}
+	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz())
 	_, err := svc.RemoveExposure(ctx, &exposev1.RemoveExposureRequest{
 		WorkloadId: exposure.WorkloadID.String(),
 		Port:       exposure.Port,
@@ -759,6 +962,7 @@ func TestRemoveExposureDeleteFailure(t *testing.T) {
 func TestListExposuresSuccess(t *testing.T) {
 	workloadID := uuid.New()
 	nextID := uuid.New()
+	orgID := uuid.New()
 	storeMock := &mockStore{
 		listExposuresByWorkload: func(_ context.Context, id uuid.UUID, size int32, cursor *store.PageCursor) (store.ListResult, error) {
 			return store.ListResult{
@@ -777,8 +981,14 @@ func TestListExposuresSuccess(t *testing.T) {
 	}
 	agentID := uuid.New()
 	ctx := contextWithAgentIdentity(agentID, workloadID)
+	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
+			AgentId:        agentID.String(),
+			OrganizationId: orgID.String(),
+		}}, nil
+	}}
 
-	svc := New(storeMock, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz())
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
 	resp, err := svc.ListExposures(ctx, &exposev1.ListExposuresRequest{WorkloadId: workloadID.String()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -795,13 +1005,45 @@ func TestListExposuresSuccess(t *testing.T) {
 	}
 }
 
-func TestListExposuresInvalidWorkload(t *testing.T) {
-	clusterAdminID := "cluster-admin-id"
-	ctx := contextWithIdentity(clusterAdminID, string(identityTypeUser), "")
-	authz := &mockAuthz{check: func(context.Context, *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
+func TestListExposuresOrgMember(t *testing.T) {
+	workloadID := uuid.New()
+	orgID := uuid.New()
+	storeMock := &mockStore{
+		listExposuresByWorkload: func(_ context.Context, id uuid.UUID, size int32, cursor *store.PageCursor) (store.ListResult, error) {
+			return store.ListResult{Exposures: []store.Exposure{}}, nil
+		},
+	}
+	userID := "user-id"
+	ctx := contextWithIdentity(userID, string(identityTypeUser), "")
+	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
+			AgentId:        uuid.New().String(),
+			OrganizationId: orgID.String(),
+		}}, nil
+	}}
+	authz := &mockAuthz{check: func(_ context.Context, req *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
+		if req.GetTupleKey().GetUser() != identityUserPrefix+userID {
+			return nil, fmt.Errorf("unexpected user")
+		}
+		if req.GetTupleKey().GetRelation() != organizationMemberRelation {
+			return nil, fmt.Errorf("unexpected relation")
+		}
+		if req.GetTupleKey().GetObject() != organizationObjectPrefix+orgID.String() {
+			return nil, fmt.Errorf("unexpected object")
+		}
 		return &authorizationv1.CheckResponse{Allowed: true}, nil
 	}}
-	svc := New(&mockStore{}, &mockZitiMgmt{}, &mockRunners{}, authz)
+
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, authz)
+	_, err := svc.ListExposures(ctx, &exposev1.ListExposuresRequest{WorkloadId: workloadID.String()})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestListExposuresInvalidWorkload(t *testing.T) {
+	ctx := contextWithIdentity("user-id", string(identityTypeUser), "")
+	svc := New(&mockStore{}, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz())
 	_, err := svc.ListExposures(ctx, &exposev1.ListExposuresRequest{WorkloadId: "not-a-uuid"})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected invalid argument, got %v", err)
@@ -811,8 +1053,15 @@ func TestListExposuresInvalidWorkload(t *testing.T) {
 func TestListExposuresInvalidPageToken(t *testing.T) {
 	workloadID := uuid.New()
 	agentID := uuid.New()
+	orgID := uuid.New()
 	ctx := contextWithAgentIdentity(agentID, workloadID)
-	svc := New(&mockStore{}, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz())
+	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
+			AgentId:        agentID.String(),
+			OrganizationId: orgID.String(),
+		}}, nil
+	}}
+	svc := New(&mockStore{}, &mockZitiMgmt{}, runnersMock, defaultAuthz())
 	_, err := svc.ListExposures(ctx, &exposev1.ListExposuresRequest{
 		WorkloadId: workloadID.String(),
 		PageToken:  "invalid",
@@ -830,8 +1079,15 @@ func TestListExposuresStoreError(t *testing.T) {
 		},
 	}
 	agentID := uuid.New()
+	orgID := uuid.New()
 	ctx := contextWithAgentIdentity(agentID, workloadID)
-	svc := New(storeMock, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz())
+	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
+			AgentId:        agentID.String(),
+			OrganizationId: orgID.String(),
+		}}, nil
+	}}
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
 	_, err := svc.ListExposures(ctx, &exposev1.ListExposuresRequest{WorkloadId: workloadID.String()})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected internal error, got %v", err)
