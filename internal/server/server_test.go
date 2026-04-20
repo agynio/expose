@@ -471,7 +471,8 @@ func TestAddExposureDuplicate(t *testing.T) {
 func TestAddExposureExplicitRequiresClusterAdmin(t *testing.T) {
 	workloadID := uuid.New()
 	agentID := uuid.New()
-	ctx := contextWithIdentity("user-id", string(identityTypeUser), "")
+	userID := uuid.New()
+	ctx := contextWithIdentity(userID.String(), string(identityTypeUser), "")
 
 	storeMock := &mockStore{createExposure: func(context.Context, store.Exposure) error {
 		return fmt.Errorf("unexpected create call")
@@ -491,8 +492,8 @@ func TestAddExposureExplicitRequiresClusterAdmin(t *testing.T) {
 func TestAddExposureExplicitClusterAdmin(t *testing.T) {
 	workloadID := uuid.New()
 	agentID := uuid.New()
-	userID := "user-id"
-	ctx := contextWithIdentity(userID, string(identityTypeUser), "")
+	userID := uuid.New()
+	ctx := contextWithIdentity(userID.String(), string(identityTypeUser), "")
 
 	storeMock := &mockStore{}
 	var created store.Exposure
@@ -528,7 +529,7 @@ func TestAddExposureExplicitClusterAdmin(t *testing.T) {
 	}
 
 	authz := &mockAuthz{check: func(_ context.Context, req *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
-		if req.GetTupleKey().GetUser() != identityUserPrefix+userID {
+		if req.GetTupleKey().GetUser() != identityUserPrefix+userID.String() {
 			return nil, fmt.Errorf("unexpected user")
 		}
 		if req.GetTupleKey().GetRelation() != clusterAdminRelation {
@@ -873,8 +874,8 @@ func TestRemoveExposureOrgOwner(t *testing.T) {
 
 	orgID := uuid.New()
 	agentID := uuid.New()
-	userID := "user-id"
-	ctx := contextWithIdentity(userID, string(identityTypeUser), "")
+	userID := uuid.New()
+	ctx := contextWithIdentity(userID.String(), string(identityTypeUser), "")
 	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
 			AgentId:        agentID.String(),
@@ -882,7 +883,7 @@ func TestRemoveExposureOrgOwner(t *testing.T) {
 		}}, nil
 	}}
 	authz := &mockAuthz{check: func(_ context.Context, req *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
-		if req.GetTupleKey().GetUser() != identityUserPrefix+userID {
+		if req.GetTupleKey().GetUser() != identityUserPrefix+userID.String() {
 			return nil, fmt.Errorf("unexpected user")
 		}
 		if req.GetTupleKey().GetRelation() != organizationOwnerRelation {
@@ -1010,8 +1011,8 @@ func TestListExposuresOrgMember(t *testing.T) {
 			return store.ListResult{Exposures: []store.Exposure{}}, nil
 		},
 	}
-	userID := "user-id"
-	ctx := contextWithIdentity(userID, string(identityTypeUser), "")
+	userID := uuid.New()
+	ctx := contextWithIdentity(userID.String(), string(identityTypeUser), "")
 	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
 			AgentId:        uuid.New().String(),
@@ -1019,7 +1020,7 @@ func TestListExposuresOrgMember(t *testing.T) {
 		}}, nil
 	}}
 	authz := &mockAuthz{check: func(_ context.Context, req *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
-		if req.GetTupleKey().GetUser() != identityUserPrefix+userID {
+		if req.GetTupleKey().GetUser() != identityUserPrefix+userID.String() {
 			return nil, fmt.Errorf("unexpected user")
 		}
 		if req.GetTupleKey().GetRelation() != organizationMemberRelation {
@@ -1039,7 +1040,8 @@ func TestListExposuresOrgMember(t *testing.T) {
 }
 
 func TestListExposuresInvalidWorkload(t *testing.T) {
-	ctx := contextWithIdentity("user-id", string(identityTypeUser), "")
+	userID := uuid.New()
+	ctx := contextWithIdentity(userID.String(), string(identityTypeUser), "")
 	svc := New(&mockStore{}, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz())
 	_, err := svc.ListExposures(ctx, &exposev1.ListExposuresRequest{WorkloadId: "not-a-uuid"})
 	if status.Code(err) != codes.InvalidArgument {
