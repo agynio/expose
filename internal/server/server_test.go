@@ -9,6 +9,7 @@ import (
 
 	authorizationv1 "github.com/agynio/expose/.gen/go/agynio/api/authorization/v1"
 	exposev1 "github.com/agynio/expose/.gen/go/agynio/api/expose/v1"
+	runnerv1 "github.com/agynio/expose/.gen/go/agynio/api/runner/v1"
 	runnersv1 "github.com/agynio/expose/.gen/go/agynio/api/runners/v1"
 	zitimanagementv1 "github.com/agynio/expose/.gen/go/agynio/api/ziti_management/v1"
 	"github.com/agynio/expose/internal/store"
@@ -237,6 +238,10 @@ func (m *mockRunners) ListWorkloads(context.Context, *runnersv1.ListWorkloadsReq
 }
 
 func (m *mockRunners) BatchUpdateWorkloadSampledAt(context.Context, *runnersv1.BatchUpdateWorkloadSampledAtRequest, ...grpc.CallOption) (*runnersv1.BatchUpdateWorkloadSampledAtResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) StreamWorkloadLogs(context.Context, *runnerv1.StreamWorkloadLogsRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[runnerv1.StreamWorkloadLogsResponse], error) {
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 

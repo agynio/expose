@@ -92,7 +92,14 @@ func (r *Reconciler) listenNotifications(ctx context.Context) {
 }
 
 func (r *Reconciler) subscribeAndProcess(ctx context.Context) error {
-	stream, err := r.notifications.Subscribe(ctx, &notificationsv1.SubscribeRequest{})
+	rooms, err := r.activeWorkloadRooms(ctx)
+	if err != nil {
+		return err
+	}
+	if len(rooms) == 0 {
+		return nil
+	}
+	stream, err := r.notifications.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: rooms})
 	if err != nil {
 		return err
 	}
@@ -119,6 +126,18 @@ func (r *Reconciler) subscribeAndProcess(ctx context.Context) error {
 			r.reconcileWorkload(ctx, workloadID)
 		}
 	}
+}
+
+func (r *Reconciler) activeWorkloadRooms(ctx context.Context) ([]string, error) {
+	workloadIDs, err := r.store.ListAllActiveWorkloadIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rooms := make([]string, 0, len(workloadIDs))
+	for _, workloadID := range workloadIDs {
+		rooms = append(rooms, "workload:"+workloadID.String())
+	}
+	return rooms, nil
 }
 
 func (r *Reconciler) reconcile(ctx context.Context) {
