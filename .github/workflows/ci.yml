@@ -21,7 +21,7 @@ jobs:
           version: 1.66.0
       - name: Generate protobuf bindings
         run: >-
-          buf generate buf.build/agynio/api
+          buf generate buf.build/agynio/api --include-imports
           --path agynio/api/expose/v1
           --path agynio/api/runner/v1
           --path agynio/api/ziti_management/v1
