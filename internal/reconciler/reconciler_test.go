@@ -3,9 +3,11 @@ package reconciler
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
+	notificationsv1 "github.com/agynio/expose/.gen/go/agynio/api/notifications/v1"
 	runnerv1 "github.com/agynio/expose/.gen/go/agynio/api/runner/v1"
 	runnersv1 "github.com/agynio/expose/.gen/go/agynio/api/runners/v1"
 	zitimanagementv1 "github.com/agynio/expose/.gen/go/agynio/api/ziti_management/v1"
@@ -13,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -232,6 +235,55 @@ func (m *mockRunners) ListVolumesByThread(context.Context, *runnersv1.ListVolume
 
 func (m *mockRunners) BatchUpdateVolumeSampledAt(context.Context, *runnersv1.BatchUpdateVolumeSampledAtRequest, ...grpc.CallOption) (*runnersv1.BatchUpdateVolumeSampledAtResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+type mockNotifications struct {
+	subscribe func(ctx context.Context, req *notificationsv1.SubscribeRequest) (grpc.ServerStreamingClient[notificationsv1.SubscribeResponse], error)
+}
+
+func (m *mockNotifications) Publish(context.Context, *notificationsv1.PublishRequest, ...grpc.CallOption) (*notificationsv1.PublishResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockNotifications) Subscribe(ctx context.Context, req *notificationsv1.SubscribeRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[notificationsv1.SubscribeResponse], error) {
+	if m.subscribe == nil {
+		return nil, status.Error(codes.Unimplemented, "not implemented")
+	}
+	return m.subscribe(ctx, req)
+}
+
+type mockSubscribeStream struct {
+	ctx context.Context
+}
+
+func (m *mockSubscribeStream) Recv() (*notificationsv1.SubscribeResponse, error) {
+	<-m.ctx.Done()
+	return nil, m.ctx.Err()
+}
+
+func (m *mockSubscribeStream) Header() (metadata.MD, error) {
+	return nil, nil
+}
+
+func (m *mockSubscribeStream) Trailer() metadata.MD {
+	return nil
+}
+
+func (m *mockSubscribeStream) CloseSend() error {
+	return nil
+}
+
+func (m *mockSubscribeStream) Context() context.Context {
+	return m.ctx
+}
+
+func (m *mockSubscribeStream) SendMsg(interface{}) error {
+	return nil
+}
+
+func (m *mockSubscribeStream) RecvMsg(interface{}) error {
+	<-m.ctx.Done()
+	return m.ctx.Err()
 }
 
 func TestReconcileOrphanedRemovesExposure(t *testing.T) {
@@ -1056,5 +1108,95 @@ func TestParseWorkloadRoom(t *testing.T) {
 				t.Fatalf("expected %v, got %v", tc.value, got)
 			}
 		})
+	}
+}
+
+func TestSubscribeAndProcessResubscribesOnRoomChange(t *testing.T) {
+	previousInterval := notificationRoomPollInterval
+	notificationRoomPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() {
+		notificationRoomPollInterval = previousInterval
+	})
+
+	workloadA := uuid.New()
+	workloadB := uuid.New()
+
+	var (
+		mu    sync.Mutex
+		calls int
+	)
+	storeMock := &mockReconcilerStore{
+		listAllActiveWorkloads: func(context.Context) ([]uuid.UUID, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			calls++
+			if calls == 1 {
+				return []uuid.UUID{workloadA}, nil
+			}
+			return []uuid.UUID{workloadA, workloadB}, nil
+		},
+	}
+
+	roomsCh := make(chan []string, 2)
+	notifications := &mockNotifications{
+		subscribe: func(ctx context.Context, req *notificationsv1.SubscribeRequest) (grpc.ServerStreamingClient[notificationsv1.SubscribeResponse], error) {
+			rooms := append([]string(nil), req.GetRooms()...)
+			roomsCh <- rooms
+			return &mockSubscribeStream{ctx: ctx}, nil
+		},
+	}
+
+	reconciler := New(storeMock, nil, nil, notifications, time.Second)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- reconciler.subscribeAndProcess(ctx)
+	}()
+
+	firstRooms := waitForRooms(t, roomsCh)
+	assertWorkloadRooms(t, firstRooms, []uuid.UUID{workloadA})
+
+	secondRooms := waitForRooms(t, roomsCh)
+	assertWorkloadRooms(t, secondRooms, []uuid.UUID{workloadA, workloadB})
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for subscribe to exit")
+	}
+}
+
+func waitForRooms(t *testing.T, roomsCh <-chan []string) []string {
+	t.Helper()
+	select {
+	case rooms := <-roomsCh:
+		return rooms
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for subscribe")
+		return nil
+	}
+}
+
+func assertWorkloadRooms(t *testing.T, got []string, want []uuid.UUID) {
+	t.Helper()
+	expected := make(map[string]struct{}, len(want))
+	for _, id := range want {
+		expected[workloadRoom(id)] = struct{}{}
+	}
+	if len(got) != len(expected) {
+		t.Fatalf("expected %d rooms, got %d", len(expected), len(got))
+	}
+	for _, room := range got {
+		if _, ok := expected[room]; !ok {
+			t.Fatalf("unexpected room %s", room)
+		}
 	}
 }

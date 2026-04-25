@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,7 +17,12 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const notificationRetryDelay = 5 * time.Second
+const (
+	notificationRetryDelay = 5 * time.Second
+	workloadRoomPrefix     = "workload:"
+)
+
+var notificationRoomPollInterval = notificationRetryDelay
 
 type ReconcilerStore interface {
 	ListExposuresByStatus(ctx context.Context, status store.ExposureStatus) ([]store.Exposure, error)
@@ -96,34 +102,100 @@ func (r *Reconciler) subscribeAndProcess(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if len(rooms) == 0 {
-		return nil
-	}
-	stream, err := r.notifications.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: rooms})
-	if err != nil {
-		return err
-	}
-	for {
-		resp, err := stream.Recv()
+	for len(rooms) > 0 {
+		subscribeCtx, cancel := context.WithCancel(ctx)
+		roomsUpdated := make(chan []string, 1)
+		roomsErrs := make(chan error, 1)
+		go r.watchActiveWorkloadRooms(subscribeCtx, rooms, roomsUpdated, roomsErrs, cancel)
+
+		stream, err := r.notifications.Subscribe(subscribeCtx, &notificationsv1.SubscribeRequest{Rooms: rooms})
 		if err != nil {
-			if errors.Is(err, context.Canceled) || status.Code(err) == codes.Canceled {
-				return nil
-			}
+			cancel()
 			return err
 		}
-		envelope := resp.GetEnvelope()
-		if envelope == nil {
-			continue
-		}
-		if envelope.GetEvent() != "workload.status_changed" {
-			continue
-		}
-		for _, room := range envelope.GetRooms() {
-			workloadID, ok := parseWorkloadRoom(room)
-			if !ok {
+		resubscribe := false
+		for {
+			resp, err := stream.Recv()
+			if err != nil {
+				cancel()
+				if errors.Is(err, context.Canceled) || status.Code(err) == codes.Canceled {
+					if ctx.Err() != nil {
+						return nil
+					}
+					select {
+					case err := <-roomsErrs:
+						return err
+					default:
+					}
+					select {
+					case rooms = <-roomsUpdated:
+						resubscribe = true
+					default:
+					}
+					break
+				}
+				return err
+			}
+			envelope := resp.GetEnvelope()
+			if envelope == nil {
 				continue
 			}
-			r.reconcileWorkload(ctx, workloadID)
+			if envelope.GetEvent() != "workload.status_changed" {
+				continue
+			}
+			for _, room := range envelope.GetRooms() {
+				workloadID, ok := parseWorkloadRoom(room)
+				if !ok {
+					continue
+				}
+				r.reconcileWorkload(ctx, workloadID)
+			}
+		}
+		if !resubscribe {
+			return nil
+		}
+		if len(rooms) == 0 {
+			return nil
+		}
+	}
+	return nil
+}
+
+func (r *Reconciler) watchActiveWorkloadRooms(
+	ctx context.Context,
+	rooms []string,
+	roomsUpdated chan<- []string,
+	roomsErrs chan<- error,
+	cancel context.CancelFunc,
+) {
+	ticker := time.NewTicker(notificationRoomPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			nextRooms, err := r.activeWorkloadRooms(ctx)
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+				select {
+				case roomsErrs <- err:
+				default:
+				}
+				cancel()
+				return
+			}
+			if roomsEqual(rooms, nextRooms) {
+				continue
+			}
+			select {
+			case roomsUpdated <- nextRooms:
+			default:
+			}
+			cancel()
+			return
 		}
 	}
 }
@@ -135,8 +207,9 @@ func (r *Reconciler) activeWorkloadRooms(ctx context.Context) ([]string, error) 
 	}
 	rooms := make([]string, 0, len(workloadIDs))
 	for _, workloadID := range workloadIDs {
-		rooms = append(rooms, "workload:"+workloadID.String())
+		rooms = append(rooms, workloadRoom(workloadID))
 	}
+	sort.Strings(rooms)
 	return rooms, nil
 }
 
@@ -273,11 +346,10 @@ func isNotFound(err error) bool {
 }
 
 func parseWorkloadRoom(room string) (uuid.UUID, bool) {
-	const prefix = "workload:"
-	if !strings.HasPrefix(room, prefix) {
+	if !strings.HasPrefix(room, workloadRoomPrefix) {
 		return uuid.UUID{}, false
 	}
-	value := strings.TrimPrefix(room, prefix)
+	value := strings.TrimPrefix(room, workloadRoomPrefix)
 	if value == "" {
 		return uuid.UUID{}, false
 	}
@@ -286,4 +358,20 @@ func parseWorkloadRoom(room string) (uuid.UUID, bool) {
 		return uuid.UUID{}, false
 	}
 	return id, true
+}
+
+func workloadRoom(workloadID uuid.UUID) string {
+	return workloadRoomPrefix + workloadID.String()
+}
+
+func roomsEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for idx, room := range left {
+		if room != right[idx] {
+			return false
+		}
+	}
+	return true
 }
