@@ -48,42 +48,26 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 	if err != nil {
 		return nil, err
 	}
-	explicitWorkloadID := strings.TrimSpace(req.GetWorkloadId())
-	var workloadID uuid.UUID
+	workloadID, err := resolveWorkloadIDFromRequest(caller, req.GetWorkloadId())
+	if err != nil {
+		return nil, err
+	}
 	var agentID uuid.UUID
-	if explicitWorkloadID != "" {
+	if caller.identity.identityType != identityTypeAgent {
 		if err := requireClusterAdmin(ctx, s.authz, caller.identity.identityID); err != nil {
 			return nil, err
-		}
-		parsedWorkloadID, err := parseUUID(explicitWorkloadID, "workload_id")
-		if err != nil {
-			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 		parsedAgentID, err := parseUUID(req.GetAgentId(), "agent_id")
 		if err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
-		workloadID = parsedWorkloadID
 		agentID = parsedAgentID
-	} else {
-		if caller.identity.identityType != identityTypeAgent {
-			return nil, status.Error(codes.PermissionDenied, "permission denied")
-		}
-		resolvedWorkloadID, err := resolveWorkloadIDFromRequest(caller, "")
-		if err != nil {
-			return nil, err
-		}
-		parsedWorkloadID, err := parseUUID(resolvedWorkloadID, "workload_id")
-		if err != nil {
-			return nil, status.Error(codes.InvalidArgument, err.Error())
-		}
-		workloadID = parsedWorkloadID
 	}
 	port := req.GetPort()
 	if err := validatePort(port); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	if explicitWorkloadID == "" {
+	if caller.identity.identityType == identityTypeAgent {
 		workload, err := s.fetchWorkload(ctx, caller, workloadID)
 		if err != nil {
 			return nil, err
@@ -92,7 +76,7 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 		if err != nil {
 			return nil, err
 		}
-		if err := ensureIDMatch(agentIDValue.String(), req.GetAgentId(), "agent"); err != nil {
+		if err := ensureIDMatch(agentIDValue, req.GetAgentId(), "agent"); err != nil {
 			return nil, err
 		}
 		if err := requireAgentSelf(caller, agentIDValue); err != nil {
@@ -182,13 +166,9 @@ func (s *Server) RemoveExposure(ctx context.Context, req *exposev1.RemoveExposur
 	if err != nil {
 		return nil, err
 	}
-	workloadIDValue, err := resolveWorkloadIDFromRequest(caller, req.GetWorkloadId())
+	workloadID, err := resolveWorkloadIDFromRequest(caller, req.GetWorkloadId())
 	if err != nil {
 		return nil, err
-	}
-	workloadID, err := parseUUID(workloadIDValue, "workload_id")
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	port := req.GetPort()
 	if err := validatePort(port); err != nil {
@@ -212,7 +192,7 @@ func (s *Server) RemoveExposure(ctx context.Context, req *exposev1.RemoveExposur
 		return nil, err
 	}
 	if !allowed {
-		if err := requireOrgRelation(ctx, s.authz, caller.identity.identityID, orgID.String(), organizationOwnerRelation); err != nil {
+		if err := requireOrgRelation(ctx, s.authz, caller.identity.identityID, orgID, organizationOwnerRelation); err != nil {
 			return nil, err
 		}
 	}
@@ -239,13 +219,9 @@ func (s *Server) ListExposures(ctx context.Context, req *exposev1.ListExposuresR
 	if err != nil {
 		return nil, err
 	}
-	workloadIDValue, err := resolveWorkloadIDFromRequest(caller, req.GetWorkloadId())
+	workloadID, err := resolveWorkloadIDFromRequest(caller, req.GetWorkloadId())
 	if err != nil {
 		return nil, err
-	}
-	workloadID, err := parseUUID(workloadIDValue, "workload_id")
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	workload, err := s.fetchWorkload(ctx, caller, workloadID)
 	if err != nil {
@@ -264,7 +240,7 @@ func (s *Server) ListExposures(ctx context.Context, req *exposev1.ListExposuresR
 		return nil, err
 	}
 	if !allowed {
-		if err := requireOrgRelation(ctx, s.authz, caller.identity.identityID, orgID.String(), organizationMemberRelation); err != nil {
+		if err := requireOrgRelation(ctx, s.authz, caller.identity.identityID, orgID, organizationMemberRelation); err != nil {
 			return nil, err
 		}
 	}
@@ -427,11 +403,7 @@ func agentMatchesWorkload(caller exposureCaller, agentID uuid.UUID) (bool, error
 	if caller.identity.identityType != identityTypeAgent {
 		return false, nil
 	}
-	callerID, err := parseIdentityUUID(caller.identity.identityID)
-	if err != nil {
-		return false, err
-	}
-	return callerID == agentID, nil
+	return caller.identity.identityID == agentID, nil
 }
 
 func requireAgentSelf(caller exposureCaller, agentID uuid.UUID) error {
@@ -443,18 +415,6 @@ func requireAgentSelf(caller exposureCaller, agentID uuid.UUID) error {
 		return status.Error(codes.PermissionDenied, "agent id does not match workload")
 	}
 	return nil
-}
-
-func parseIdentityUUID(value string) (uuid.UUID, error) {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return uuid.UUID{}, status.Error(codes.Unauthenticated, "identity id missing")
-	}
-	parsed, err := uuid.Parse(trimmed)
-	if err != nil {
-		return uuid.UUID{}, status.Errorf(codes.Unauthenticated, "identity id invalid: %v", err)
-	}
-	return parsed, nil
 }
 
 func validatePort(port int32) error {

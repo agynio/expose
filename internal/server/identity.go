@@ -34,9 +34,9 @@ const (
 )
 
 type resolvedIdentity struct {
-	identityID   string
+	identityID   uuid.UUID
 	identityType identityType
-	workloadID   string
+	workloadID   uuid.UUID
 }
 
 type exposureCaller struct {
@@ -51,13 +51,13 @@ func resolveExposureCaller(ctx context.Context) (exposureCaller, error) {
 	return exposureCaller{identity: resolved}, nil
 }
 
-func checkClusterAdmin(ctx context.Context, authz authorizationv1.AuthorizationServiceClient, identityID string) (bool, error) {
-	if identityID == "" {
+func checkClusterAdmin(ctx context.Context, authz authorizationv1.AuthorizationServiceClient, identityID uuid.UUID) (bool, error) {
+	if identityID == uuid.Nil {
 		return false, status.Error(codes.Internal, "identity id missing for authorization check")
 	}
 	resp, err := authz.Check(ctx, &authorizationv1.CheckRequest{
 		TupleKey: &authorizationv1.TupleKey{
-			User:     identityUserPrefix + identityID,
+			User:     identityUserPrefix + identityID.String(),
 			Relation: clusterAdminRelation,
 			Object:   clusterAdminObject,
 		},
@@ -68,7 +68,7 @@ func checkClusterAdmin(ctx context.Context, authz authorizationv1.AuthorizationS
 	return resp.GetAllowed(), nil
 }
 
-func requireClusterAdmin(ctx context.Context, authz authorizationv1.AuthorizationServiceClient, identityID string) error {
+func requireClusterAdmin(ctx context.Context, authz authorizationv1.AuthorizationServiceClient, identityID uuid.UUID) error {
 	allowed, err := checkClusterAdmin(ctx, authz, identityID)
 	if err != nil {
 		return err
@@ -79,22 +79,33 @@ func requireClusterAdmin(ctx context.Context, authz authorizationv1.Authorizatio
 	return nil
 }
 
-func resolveWorkloadIDFromRequest(caller exposureCaller, workloadID string) (string, error) {
+func resolveWorkloadIDFromRequest(caller exposureCaller, workloadID string) (uuid.UUID, error) {
 	trimmed := strings.TrimSpace(workloadID)
 	if trimmed != "" {
-		return trimmed, nil
+		parsedWorkloadID, err := parseUUID(trimmed, "workload_id")
+		if err != nil {
+			return uuid.UUID{}, status.Error(codes.InvalidArgument, err.Error())
+		}
+		if caller.identity.identityType == identityTypeAgent {
+			if caller.identity.workloadID == uuid.Nil {
+				return uuid.UUID{}, status.Error(codes.Unauthenticated, "workload id missing for agent identity")
+			}
+			if parsedWorkloadID != caller.identity.workloadID {
+				return uuid.UUID{}, status.Error(codes.PermissionDenied, "workload id does not match agent identity")
+			}
+		}
+		return parsedWorkloadID, nil
 	}
 	if caller.identity.identityType != identityTypeAgent {
-		return "", status.Error(codes.InvalidArgument, "workload id is required")
+		return uuid.UUID{}, status.Error(codes.InvalidArgument, "workload id is required")
 	}
-	callerWorkloadID := strings.TrimSpace(caller.identity.workloadID)
-	if callerWorkloadID == "" {
-		return "", status.Error(codes.Unauthenticated, "workload id missing for agent identity")
+	if caller.identity.workloadID == uuid.Nil {
+		return uuid.UUID{}, status.Error(codes.Unauthenticated, "workload id missing for agent identity")
 	}
-	return callerWorkloadID, nil
+	return caller.identity.workloadID, nil
 }
 
-func ensureIDMatch(expectedID, providedID, label string) error {
+func ensureIDMatch(expectedID uuid.UUID, providedID, label string) error {
 	trimmed := strings.TrimSpace(providedID)
 	if trimmed == "" {
 		return nil
@@ -103,25 +114,24 @@ func ensureIDMatch(expectedID, providedID, label string) error {
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "%s id must be a valid UUID: %v", label, err)
 	}
-	expectedParsed, err := uuid.Parse(strings.TrimSpace(expectedID))
-	if err != nil {
-		return status.Errorf(codes.Internal, "expected %s id invalid: %v", label, err)
+	if expectedID == uuid.Nil {
+		return status.Errorf(codes.Internal, "expected %s id missing", label)
 	}
-	if parsedProvided != expectedParsed {
+	if parsedProvided != expectedID {
 		return status.Error(codes.PermissionDenied, label+" id does not match workload")
 	}
 	return nil
 }
 
-func requireOrgRelation(ctx context.Context, authz authorizationv1.AuthorizationServiceClient, identityID, organizationID, relation string) error {
-	if identityID == "" || organizationID == "" {
+func requireOrgRelation(ctx context.Context, authz authorizationv1.AuthorizationServiceClient, identityID, organizationID uuid.UUID, relation string) error {
+	if identityID == uuid.Nil || organizationID == uuid.Nil {
 		return status.Error(codes.Internal, "identity or organization id missing for authorization check")
 	}
 	resp, err := authz.Check(ctx, &authorizationv1.CheckRequest{
 		TupleKey: &authorizationv1.TupleKey{
-			User:     identityUserPrefix + identityID,
+			User:     identityUserPrefix + identityID.String(),
 			Relation: relation,
-			Object:   organizationObjectPrefix + organizationID,
+			Object:   organizationObjectPrefix + organizationID.String(),
 		},
 	})
 	if err != nil {
@@ -147,8 +157,23 @@ func identityFromContext(ctx context.Context) (resolvedIdentity, error) {
 	if err != nil {
 		return resolvedIdentity{}, status.Error(codes.Unauthenticated, err.Error())
 	}
-	workloadID := strings.TrimSpace(metadataValue(md, workloadIDMetadataKey))
-	return resolvedIdentity{identityID: identityID, identityType: identityType, workloadID: workloadID}, nil
+	parsedIdentityID, err := uuid.Parse(identityID)
+	if err != nil {
+		return resolvedIdentity{}, status.Errorf(codes.Unauthenticated, "identity id invalid: %v", err)
+	}
+	workloadIDValue := strings.TrimSpace(metadataValue(md, workloadIDMetadataKey))
+	if identityType == identityTypeAgent && workloadIDValue == "" {
+		return resolvedIdentity{}, status.Error(codes.Unauthenticated, "workload id missing for agent identity")
+	}
+	workloadID := uuid.Nil
+	if workloadIDValue != "" {
+		parsedWorkloadID, err := uuid.Parse(workloadIDValue)
+		if err != nil {
+			return resolvedIdentity{}, status.Errorf(codes.Unauthenticated, "workload id invalid: %v", err)
+		}
+		workloadID = parsedWorkloadID
+	}
+	return resolvedIdentity{identityID: parsedIdentityID, identityType: identityType, workloadID: workloadID}, nil
 }
 
 func parseIdentityType(value string) (identityType, error) {
@@ -176,11 +201,11 @@ func metadataValue(md metadata.MD, key string) string {
 
 func outgoingContextWithIdentity(ctx context.Context, identity resolvedIdentity) context.Context {
 	md := metadata.Pairs(
-		identityIDMetadataKey, identity.identityID,
+		identityIDMetadataKey, identity.identityID.String(),
 		identityTypeMetadataKey, string(identity.identityType),
 	)
-	if identity.workloadID != "" {
-		md.Append(workloadIDMetadataKey, identity.workloadID)
+	if identity.workloadID != uuid.Nil {
+		md.Append(workloadIDMetadataKey, identity.workloadID.String())
 	}
 	return metadata.NewOutgoingContext(ctx, md)
 }
