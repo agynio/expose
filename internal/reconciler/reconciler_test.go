@@ -3,6 +3,7 @@ package reconciler
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -237,6 +238,31 @@ func (m *mockRunners) BatchUpdateVolumeSampledAt(context.Context, *runnersv1.Bat
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
+func assertOutgoingIdentity(t *testing.T, ctx context.Context, agentID, workloadID uuid.UUID) {
+	t.Helper()
+	md, ok := metadata.FromOutgoingContext(ctx)
+	if !ok {
+		t.Fatal("expected outgoing metadata")
+	}
+	if value := metadataValue(md, identityIDMetadataKey); value != agentID.String() {
+		t.Fatalf("expected identity id %s, got %s", agentID.String(), value)
+	}
+	if value := metadataValue(md, identityTypeMetadataKey); value != identityTypeAgent {
+		t.Fatalf("expected identity type %s, got %s", identityTypeAgent, value)
+	}
+	if value := metadataValue(md, workloadIDMetadataKey); value != workloadID.String() {
+		t.Fatalf("expected workload id %s, got %s", workloadID.String(), value)
+	}
+}
+
+func metadataValue(md metadata.MD, key string) string {
+	values := md.Get(key)
+	if len(values) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(values[0])
+}
+
 type mockNotifications struct {
 	subscribe func(ctx context.Context, req *notificationsv1.SubscribeRequest) (grpc.ServerStreamingClient[notificationsv1.SubscribeResponse], error)
 }
@@ -291,6 +317,7 @@ func TestReconcileOrphanedRemovesExposure(t *testing.T) {
 	exposure := store.Exposure{
 		ID:                   uuid.New(),
 		WorkloadID:           uuid.New(),
+		AgentID:              uuid.New(),
 		OpenZitiServiceID:    "svc",
 		OpenZitiBindPolicyID: "bind",
 		OpenZitiDialPolicyID: "dial",
@@ -338,7 +365,11 @@ func TestReconcileOrphanedRemovesExposure(t *testing.T) {
 	}
 
 	runners := &mockRunners{
-		getWorkload: func(_ context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+		getWorkload: func(ctx context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+			if req.Id != exposure.WorkloadID.String() {
+				t.Fatalf("unexpected workload id %s", req.Id)
+			}
+			assertOutgoingIdentity(t, ctx, exposure.AgentID, exposure.WorkloadID)
 			return nil, status.Error(codes.NotFound, "missing")
 		},
 	}
@@ -365,6 +396,7 @@ func TestReconcileOrphanedRemovesExposureWhenRemovedAt(t *testing.T) {
 	exposure := store.Exposure{
 		ID:                   uuid.New(),
 		WorkloadID:           uuid.New(),
+		AgentID:              uuid.New(),
 		OpenZitiServiceID:    "svc",
 		OpenZitiBindPolicyID: "bind",
 		OpenZitiDialPolicyID: "dial",
@@ -444,6 +476,7 @@ func TestReconcileOrphanedRemovesExposureWhenFailed(t *testing.T) {
 	exposure := store.Exposure{
 		ID:                   uuid.New(),
 		WorkloadID:           uuid.New(),
+		AgentID:              uuid.New(),
 		OpenZitiServiceID:    "svc",
 		OpenZitiBindPolicyID: "bind",
 		OpenZitiDialPolicyID: "dial",
@@ -520,6 +553,7 @@ func TestReconcileOrphanedRemovesExposureWhenNilWorkload(t *testing.T) {
 	exposure := store.Exposure{
 		ID:                   uuid.New(),
 		WorkloadID:           uuid.New(),
+		AgentID:              uuid.New(),
 		OpenZitiServiceID:    "svc",
 		OpenZitiBindPolicyID: "bind",
 		OpenZitiDialPolicyID: "dial",
@@ -591,7 +625,7 @@ func TestReconcileOrphanedRemovesExposureWhenNilWorkload(t *testing.T) {
 
 func TestReconcileOrphanedSkipsExistingWorkload(t *testing.T) {
 	ctx := context.Background()
-	exposure := store.Exposure{ID: uuid.New(), WorkloadID: uuid.New()}
+	exposure := store.Exposure{ID: uuid.New(), WorkloadID: uuid.New(), AgentID: uuid.New()}
 
 	updated := 0
 	deleted := 0
@@ -636,6 +670,7 @@ func TestReconcileWorkloadRemovesExposureWhenRemovedAt(t *testing.T) {
 	exposure := store.Exposure{
 		ID:                   uuid.New(),
 		WorkloadID:           workloadID,
+		AgentID:              uuid.New(),
 		OpenZitiServiceID:    "svc",
 		OpenZitiBindPolicyID: "bind",
 		OpenZitiDialPolicyID: "dial",
@@ -674,10 +709,11 @@ func TestReconcileWorkloadRemovesExposureWhenRemovedAt(t *testing.T) {
 	}
 
 	runners := &mockRunners{
-		getWorkload: func(_ context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+		getWorkload: func(ctx context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 			if req.Id != workloadID.String() {
 				t.Fatalf("unexpected workload id %s", req.Id)
 			}
+			assertOutgoingIdentity(t, ctx, exposure.AgentID, exposure.WorkloadID)
 			return &runnersv1.GetWorkloadResponse{
 				Workload: &runnersv1.Workload{
 					Status:    runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING,
@@ -710,6 +746,7 @@ func TestReconcileWorkloadRemovesExposureWhenFailed(t *testing.T) {
 	exposure := store.Exposure{
 		ID:                   uuid.New(),
 		WorkloadID:           workloadID,
+		AgentID:              uuid.New(),
 		OpenZitiServiceID:    "svc",
 		OpenZitiBindPolicyID: "bind",
 		OpenZitiDialPolicyID: "dial",
@@ -778,6 +815,7 @@ func TestReconcileWorkloadRemovesExposureWhenNilWorkload(t *testing.T) {
 	exposure := store.Exposure{
 		ID:                   uuid.New(),
 		WorkloadID:           workloadID,
+		AgentID:              uuid.New(),
 		OpenZitiServiceID:    "svc",
 		OpenZitiBindPolicyID: "bind",
 		OpenZitiDialPolicyID: "dial",
@@ -844,7 +882,7 @@ func TestReconcileWorkloadRemovesExposureWhenNilWorkload(t *testing.T) {
 func TestReconcileWorkloadSkipsRunningWorkload(t *testing.T) {
 	ctx := context.Background()
 	workloadID := uuid.New()
-	exposure := store.Exposure{ID: uuid.New(), WorkloadID: workloadID}
+	exposure := store.Exposure{ID: uuid.New(), WorkloadID: workloadID, AgentID: uuid.New()}
 
 	listCalls := 0
 	deleted := 0
@@ -870,8 +908,8 @@ func TestReconcileWorkloadSkipsRunningWorkload(t *testing.T) {
 	reconciler := New(storeMock, &mockZitiMgmt{}, runners, nil, time.Second)
 	reconciler.reconcileWorkload(ctx, workloadID)
 
-	if listCalls != 0 {
-		t.Fatalf("expected no list calls, got %d", listCalls)
+	if listCalls != 1 {
+		t.Fatalf("expected list called once, got %d", listCalls)
 	}
 	if deleted != 0 {
 		t.Fatalf("expected no deletes, got %d", deleted)
@@ -880,7 +918,7 @@ func TestReconcileWorkloadSkipsRunningWorkload(t *testing.T) {
 
 func TestReconcileOrphanedSkipsOnError(t *testing.T) {
 	ctx := context.Background()
-	exposure := store.Exposure{ID: uuid.New(), WorkloadID: uuid.New()}
+	exposure := store.Exposure{ID: uuid.New(), WorkloadID: uuid.New(), AgentID: uuid.New()}
 
 	updated := 0
 	storeMock := &mockReconcilerStore{

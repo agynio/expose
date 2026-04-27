@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -601,6 +602,32 @@ func TestAddExposureWorkloadNotFound(t *testing.T) {
 	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 8080})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("expected failed precondition, got %v", err)
+	}
+}
+
+func TestAddExposureWorkloadAuthFailure(t *testing.T) {
+	storeMock := &mockStore{
+		createExposure: func(_ context.Context, exposure store.Exposure) error {
+			return fmt.Errorf("unexpected create call")
+		},
+	}
+
+	runnersMock := &mockRunners{
+		getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+			return nil, status.Error(codes.NotFound, "rpc error: code = Unauthenticated desc = unauthenticated: expected single value")
+		},
+	}
+	workloadID := uuid.New()
+	agentID := uuid.New()
+	ctx := contextWithAgentIdentity(agentID, workloadID)
+
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
+	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 8080})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("expected unauthenticated, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "runners authentication failed") {
+		t.Fatalf("expected runners auth error, got %v", err)
 	}
 }
 

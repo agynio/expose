@@ -381,16 +381,31 @@ func (s *Server) deleteService(ctx context.Context, id string) error {
 func (s *Server) fetchWorkload(ctx context.Context, caller exposureCaller, workloadID uuid.UUID) (*runnersv1.Workload, error) {
 	resp, err := s.runners.GetWorkload(outgoingContextWithIdentity(ctx, caller.identity), &runnersv1.GetWorkloadRequest{Id: workloadID.String()})
 	if err != nil {
-		if status.Code(err) == codes.NotFound {
-			return nil, status.Errorf(codes.FailedPrecondition, "workload not found: %v", err)
-		}
-		return nil, err
+		return nil, mapRunnersWorkloadError(err)
 	}
 	workload := resp.GetWorkload()
 	if workload == nil {
 		return nil, status.Error(codes.Internal, "workload missing from response")
 	}
 	return workload, nil
+}
+
+func mapRunnersWorkloadError(err error) error {
+	st, ok := status.FromError(err)
+	if !ok {
+		return err
+	}
+	message := strings.ToLower(st.Message())
+	if st.Code() == codes.Unauthenticated || strings.Contains(message, "unauthenticated") {
+		return status.Errorf(codes.Unauthenticated, "runners authentication failed: %s", st.Message())
+	}
+	if st.Code() == codes.PermissionDenied || strings.Contains(message, "permission denied") {
+		return status.Errorf(codes.PermissionDenied, "runners authorization failed: %s", st.Message())
+	}
+	if st.Code() == codes.NotFound {
+		return status.Errorf(codes.FailedPrecondition, "workload not found: %v", err)
+	}
+	return err
 }
 
 func workloadAgentID(workload *runnersv1.Workload) (uuid.UUID, error) {

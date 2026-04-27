@@ -175,12 +175,29 @@ func metadataValue(md metadata.MD, key string) string {
 }
 
 func outgoingContextWithIdentity(ctx context.Context, identity resolvedIdentity) context.Context {
-	md := metadata.Pairs(
-		identityIDMetadataKey, identity.identityID,
-		identityTypeMetadataKey, string(identity.identityType),
-	)
-	if identity.workloadID != "" {
-		md.Append(workloadIDMetadataKey, identity.workloadID)
+	merged := metadata.MD{}
+	if existing, ok := metadata.FromOutgoingContext(ctx); ok {
+		for key, values := range existing {
+			if len(values) == 0 {
+				continue
+			}
+			merged[key] = append([]string(nil), values...)
+		}
 	}
-	return metadata.NewOutgoingContext(ctx, md)
+	if incoming, ok := metadata.FromIncomingContext(ctx); ok {
+		for key, values := range incoming {
+			if len(values) == 0 {
+				continue
+			}
+			merged[key] = append(merged[key], values...)
+		}
+	}
+	merged.Set(identityIDMetadataKey, identity.identityID)
+	merged.Set(identityTypeMetadataKey, string(identity.identityType))
+	if strings.TrimSpace(identity.workloadID) != "" {
+		merged.Set(workloadIDMetadataKey, identity.workloadID)
+	} else {
+		merged.Delete(workloadIDMetadataKey)
+	}
+	return metadata.NewOutgoingContext(ctx, merged)
 }
