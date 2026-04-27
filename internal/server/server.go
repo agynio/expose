@@ -395,11 +395,10 @@ func mapRunnersWorkloadError(err error) error {
 	if !ok {
 		return err
 	}
-	message := strings.ToLower(st.Message())
-	if st.Code() == codes.Unauthenticated || strings.Contains(message, "unauthenticated") {
+	if st.Code() == codes.Unauthenticated {
 		return status.Errorf(codes.Unauthenticated, "runners authentication failed: %s", st.Message())
 	}
-	if st.Code() == codes.PermissionDenied || strings.Contains(message, "permission denied") {
+	if st.Code() == codes.PermissionDenied {
 		return status.Errorf(codes.PermissionDenied, "runners authorization failed: %s", st.Message())
 	}
 	if st.Code() == codes.NotFound {

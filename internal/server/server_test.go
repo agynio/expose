@@ -13,6 +13,7 @@ import (
 	runnerv1 "github.com/agynio/expose/.gen/go/agynio/api/runner/v1"
 	runnersv1 "github.com/agynio/expose/.gen/go/agynio/api/runners/v1"
 	zitimanagementv1 "github.com/agynio/expose/.gen/go/agynio/api/ziti_management/v1"
+	"github.com/agynio/expose/internal/identitymeta"
 	"github.com/agynio/expose/internal/store"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -272,11 +273,11 @@ func (m *mockRunners) BatchUpdateVolumeSampledAt(context.Context, *runnersv1.Bat
 
 func contextWithIdentity(identityID, identityType, workloadID string) context.Context {
 	md := metadata.Pairs(
-		identityIDMetadataKey, identityID,
-		identityTypeMetadataKey, identityType,
+		identitymeta.IdentityIDMetadataKey, identityID,
+		identitymeta.IdentityTypeMetadataKey, identityType,
 	)
 	if workloadID != "" {
-		md.Append(workloadIDMetadataKey, workloadID)
+		md.Append(identitymeta.WorkloadIDMetadataKey, workloadID)
 	}
 	return metadata.NewIncomingContext(context.Background(), md)
 }
@@ -291,17 +292,17 @@ func assertOutgoingIdentity(t *testing.T, ctx context.Context, identityID, ident
 	if !ok {
 		t.Fatal("expected outgoing metadata")
 	}
-	if value := metadataValue(md, identityIDMetadataKey); value != identityID {
+	if value := metadataValue(md, identitymeta.IdentityIDMetadataKey); value != identityID {
 		t.Fatalf("expected identity id %s, got %s", identityID, value)
 	}
-	if value := metadataValue(md, identityTypeMetadataKey); value != identityType {
+	if value := metadataValue(md, identitymeta.IdentityTypeMetadataKey); value != identityType {
 		t.Fatalf("expected identity type %s, got %s", identityType, value)
 	}
 	if workloadID != "" {
-		if value := metadataValue(md, workloadIDMetadataKey); value != workloadID {
+		if value := metadataValue(md, identitymeta.WorkloadIDMetadataKey); value != workloadID {
 			t.Fatalf("expected workload id %s, got %s", workloadID, value)
 		}
-	} else if value := metadataValue(md, workloadIDMetadataKey); value != "" {
+	} else if value := metadataValue(md, identitymeta.WorkloadIDMetadataKey); value != "" {
 		t.Fatalf("expected no workload id, got %s", value)
 	}
 }
@@ -614,7 +615,7 @@ func TestAddExposureWorkloadAuthFailure(t *testing.T) {
 
 	runnersMock := &mockRunners{
 		getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
-			return nil, status.Error(codes.NotFound, "rpc error: code = Unauthenticated desc = unauthenticated: expected single value")
+			return nil, status.Error(codes.Unauthenticated, "unauthenticated: expected single value")
 		},
 	}
 	workloadID := uuid.New()

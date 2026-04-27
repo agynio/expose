@@ -12,6 +12,7 @@ import (
 	runnerv1 "github.com/agynio/expose/.gen/go/agynio/api/runner/v1"
 	runnersv1 "github.com/agynio/expose/.gen/go/agynio/api/runners/v1"
 	zitimanagementv1 "github.com/agynio/expose/.gen/go/agynio/api/ziti_management/v1"
+	"github.com/agynio/expose/internal/identitymeta"
 	"github.com/agynio/expose/internal/store"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -244,13 +245,13 @@ func assertOutgoingIdentity(t *testing.T, ctx context.Context, agentID, workload
 	if !ok {
 		t.Fatal("expected outgoing metadata")
 	}
-	if value := metadataValue(md, identityIDMetadataKey); value != agentID.String() {
+	if value := metadataValue(md, identitymeta.IdentityIDMetadataKey); value != agentID.String() {
 		t.Fatalf("expected identity id %s, got %s", agentID.String(), value)
 	}
-	if value := metadataValue(md, identityTypeMetadataKey); value != identityTypeAgent {
-		t.Fatalf("expected identity type %s, got %s", identityTypeAgent, value)
+	if value := metadataValue(md, identitymeta.IdentityTypeMetadataKey); value != identitymeta.IdentityTypeAgent {
+		t.Fatalf("expected identity type %s, got %s", identitymeta.IdentityTypeAgent, value)
 	}
-	if value := metadataValue(md, workloadIDMetadataKey); value != workloadID.String() {
+	if value := metadataValue(md, identitymeta.WorkloadIDMetadataKey); value != workloadID.String() {
 		t.Fatalf("expected workload id %s, got %s", workloadID.String(), value)
 	}
 }

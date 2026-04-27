@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	authorizationv1 "github.com/agynio/expose/.gen/go/agynio/api/authorization/v1"
+	"github.com/agynio/expose/internal/identitymeta"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -13,9 +14,6 @@ import (
 )
 
 const (
-	identityIDMetadataKey      = "x-identity-id"
-	identityTypeMetadataKey    = "x-identity-type"
-	workloadIDMetadataKey      = "x-workload-id"
 	clusterAdminRelation       = "admin"
 	clusterAdminObject         = "cluster:global"
 	identityUserPrefix         = "identity:"
@@ -27,10 +25,10 @@ const (
 type identityType string
 
 const (
-	identityTypeUser   identityType = "user"
-	identityTypeAgent  identityType = "agent"
-	identityTypeApp    identityType = "app"
-	identityTypeRunner identityType = "runner"
+	identityTypeUser   identityType = identitymeta.IdentityTypeUser
+	identityTypeAgent  identityType = identitymeta.IdentityTypeAgent
+	identityTypeApp    identityType = identitymeta.IdentityTypeApp
+	identityTypeRunner identityType = identitymeta.IdentityTypeRunner
 )
 
 type resolvedIdentity struct {
@@ -138,8 +136,8 @@ func identityFromContext(ctx context.Context) (resolvedIdentity, error) {
 	if !ok {
 		return resolvedIdentity{}, status.Error(codes.Unauthenticated, "identity not available")
 	}
-	identityID := strings.TrimSpace(metadataValue(md, identityIDMetadataKey))
-	identityTypeValue := strings.TrimSpace(metadataValue(md, identityTypeMetadataKey))
+	identityID := strings.TrimSpace(metadataValue(md, identitymeta.IdentityIDMetadataKey))
+	identityTypeValue := strings.TrimSpace(metadataValue(md, identitymeta.IdentityTypeMetadataKey))
 	if identityID == "" || identityTypeValue == "" {
 		return resolvedIdentity{}, status.Error(codes.Unauthenticated, "identity not available")
 	}
@@ -147,7 +145,7 @@ func identityFromContext(ctx context.Context) (resolvedIdentity, error) {
 	if err != nil {
 		return resolvedIdentity{}, status.Error(codes.Unauthenticated, err.Error())
 	}
-	workloadID := strings.TrimSpace(metadataValue(md, workloadIDMetadataKey))
+	workloadID := strings.TrimSpace(metadataValue(md, identitymeta.WorkloadIDMetadataKey))
 	return resolvedIdentity{identityID: identityID, identityType: identityType, workloadID: workloadID}, nil
 }
 
@@ -184,20 +182,12 @@ func outgoingContextWithIdentity(ctx context.Context, identity resolvedIdentity)
 			merged[key] = append([]string(nil), values...)
 		}
 	}
-	if incoming, ok := metadata.FromIncomingContext(ctx); ok {
-		for key, values := range incoming {
-			if len(values) == 0 {
-				continue
-			}
-			merged[key] = append(merged[key], values...)
-		}
-	}
-	merged.Set(identityIDMetadataKey, identity.identityID)
-	merged.Set(identityTypeMetadataKey, string(identity.identityType))
+	merged.Set(identitymeta.IdentityIDMetadataKey, identity.identityID)
+	merged.Set(identitymeta.IdentityTypeMetadataKey, string(identity.identityType))
 	if strings.TrimSpace(identity.workloadID) != "" {
-		merged.Set(workloadIDMetadataKey, identity.workloadID)
+		merged.Set(identitymeta.WorkloadIDMetadataKey, identity.workloadID)
 	} else {
-		merged.Delete(workloadIDMetadataKey)
+		merged.Delete(identitymeta.WorkloadIDMetadataKey)
 	}
 	return metadata.NewOutgoingContext(ctx, merged)
 }
