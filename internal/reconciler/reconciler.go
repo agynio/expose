@@ -226,7 +226,8 @@ func (r *Reconciler) reconcileOrphaned(ctx context.Context) {
 		return
 	}
 	for _, exposure := range exposures {
-		resp, err := r.runners.GetWorkload(ctx, &runnersv1.GetWorkloadRequest{Id: exposure.WorkloadID.String()})
+		workloadCtx := contextWithExposureIdentity(ctx, exposure)
+		resp, err := r.runners.GetWorkload(workloadCtx, &runnersv1.GetWorkloadRequest{Id: exposure.WorkloadID.String()})
 		if err == nil {
 			if !isTerminalWorkload(resp.GetWorkload()) {
 				continue
@@ -266,18 +267,22 @@ func (r *Reconciler) reconcileRemoving(ctx context.Context) {
 }
 
 func (r *Reconciler) reconcileWorkload(ctx context.Context, workloadID uuid.UUID) {
-	resp, err := r.runners.GetWorkload(ctx, &runnersv1.GetWorkloadRequest{Id: workloadID.String()})
+	exposures, err := r.store.ListExposuresByWorkloadAll(ctx, workloadID)
+	if err != nil {
+		log.Printf("reconcile workload %s: list exposures: %v", workloadID, err)
+		return
+	}
+	if len(exposures) == 0 {
+		return
+	}
+	workloadCtx := contextWithExposureIdentity(ctx, exposures[0])
+	resp, err := r.runners.GetWorkload(workloadCtx, &runnersv1.GetWorkloadRequest{Id: workloadID.String()})
 	if err == nil {
 		if !isTerminalWorkload(resp.GetWorkload()) {
 			return
 		}
 	} else if !isNotFound(err) {
 		log.Printf("reconcile workload %s: get workload: %v", workloadID, err)
-		return
-	}
-	exposures, err := r.store.ListExposuresByWorkloadAll(ctx, workloadID)
-	if err != nil {
-		log.Printf("reconcile workload %s: list exposures: %v", workloadID, err)
 		return
 	}
 	for _, exposure := range exposures {
