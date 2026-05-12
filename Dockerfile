@@ -22,7 +22,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 COPY buf.gen.yaml buf.yaml ./
-RUN buf generate buf.build/agynio/api \
+RUN buf generate buf.build/agynio/api --include-imports \
     --path agynio/api/expose/v1 \
     --path agynio/api/ziti_management/v1 \
     --path agynio/api/runners/v1 \
