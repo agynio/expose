@@ -136,10 +136,6 @@ func identityFromContext(ctx context.Context) (resolvedIdentity, error) {
 	if !ok {
 		return resolvedIdentity{}, status.Error(codes.Unauthenticated, "identity not available")
 	}
-	return identityFromMetadata(md)
-}
-
-func identityFromMetadata(md metadata.MD) (resolvedIdentity, error) {
 	identityID := strings.TrimSpace(metadataValue(md, identitymeta.IdentityIDMetadataKey))
 	identityTypeValue := strings.TrimSpace(metadataValue(md, identitymeta.IdentityTypeMetadataKey))
 	if identityID == "" || identityTypeValue == "" {

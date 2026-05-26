@@ -282,6 +282,18 @@ func contextWithIdentity(identityID, identityType, workloadID string) context.Co
 	return metadata.NewIncomingContext(context.Background(), md)
 }
 
+func contextWithDuplicateIdentity(identityID, identityType, workloadID string) context.Context {
+	md := metadata.Pairs(
+		identitymeta.IdentityIDMetadataKey, identityID,
+		identitymeta.IdentityIDMetadataKey, identityID,
+		identitymeta.IdentityTypeMetadataKey, identityType,
+	)
+	if workloadID != "" {
+		md.Append(identitymeta.WorkloadIDMetadataKey, workloadID)
+	}
+	return metadata.NewIncomingContext(context.Background(), md)
+}
+
 func contextWithAgentIdentity(agentID, workloadID uuid.UUID) context.Context {
 	return contextWithIdentity(agentID.String(), string(identityTypeAgent), workloadID.String())
 }
@@ -292,18 +304,25 @@ func assertOutgoingIdentity(t *testing.T, ctx context.Context, identityID, ident
 	if !ok {
 		t.Fatal("expected outgoing metadata")
 	}
-	if value := metadataValue(md, identitymeta.IdentityIDMetadataKey); value != identityID {
-		t.Fatalf("expected identity id %s, got %s", identityID, value)
-	}
-	if value := metadataValue(md, identitymeta.IdentityTypeMetadataKey); value != identityType {
-		t.Fatalf("expected identity type %s, got %s", identityType, value)
-	}
+	assertMetadataValues(t, md, identitymeta.IdentityIDMetadataKey, []string{identityID})
+	assertMetadataValues(t, md, identitymeta.IdentityTypeMetadataKey, []string{identityType})
 	if workloadID != "" {
-		if value := metadataValue(md, identitymeta.WorkloadIDMetadataKey); value != workloadID {
-			t.Fatalf("expected workload id %s, got %s", workloadID, value)
-		}
+		assertMetadataValues(t, md, identitymeta.WorkloadIDMetadataKey, []string{workloadID})
 	} else if value := metadataValue(md, identitymeta.WorkloadIDMetadataKey); value != "" {
 		t.Fatalf("expected no workload id, got %s", value)
+	}
+}
+
+func assertMetadataValues(t *testing.T, md metadata.MD, key string, expected []string) {
+	t.Helper()
+	values := md.Get(key)
+	if len(values) != len(expected) {
+		t.Fatalf("expected %s values %v, got %v", key, expected, values)
+	}
+	for i, expectedValue := range expected {
+		if values[i] != expectedValue {
+			t.Fatalf("expected %s[%d] %s, got %s", key, i, expectedValue, values[i])
+		}
 	}
 }
 
@@ -629,6 +648,50 @@ func TestAddExposureWorkloadAuthFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "runners authentication failed") {
 		t.Fatalf("expected runners auth error, got %v", err)
+	}
+}
+
+func TestAddExposureRejectsMissingIdentity(t *testing.T) {
+	storeMock := &mockStore{
+		createExposure: func(_ context.Context, exposure store.Exposure) error {
+			return fmt.Errorf("unexpected create call")
+		},
+	}
+	runnersMock := &mockRunners{
+		getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+			return nil, fmt.Errorf("unexpected runners call")
+		},
+	}
+
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
+	_, err := svc.AddExposure(context.Background(), &exposev1.AddExposureRequest{Port: 8080})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("expected unauthenticated, got %v", err)
+	}
+}
+
+func TestAddExposureDuplicateIncomingIdentityInjectedOnce(t *testing.T) {
+	workloadID := uuid.New()
+	agentID := uuid.New()
+	ctx := contextWithDuplicateIdentity(agentID.String(), string(identityTypeAgent), workloadID.String())
+
+	storeMock := &mockStore{
+		createExposure: func(_ context.Context, exposure store.Exposure) error {
+			return fmt.Errorf("unexpected create call")
+		},
+	}
+
+	runnersMock := &mockRunners{
+		getWorkload: func(ctx context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+			assertOutgoingIdentity(t, ctx, agentID.String(), string(identityTypeAgent), workloadID.String())
+			return nil, status.Error(codes.NotFound, "missing")
+		},
+	}
+
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
+	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 8080})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected failed precondition, got %v", err)
 	}
 }
 

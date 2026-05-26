@@ -13,7 +13,6 @@ import (
 	zitimanagementv1 "github.com/agynio/expose/.gen/go/agynio/api/ziti_management/v1"
 	"github.com/agynio/expose/internal/store"
 	"github.com/google/uuid"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -37,100 +36,11 @@ type Server struct {
 	authz    authorizationv1.AuthorizationServiceClient
 }
 
-type GRPCServer struct {
-	exposev1.UnimplementedExposeServiceServer
-	store    ExposureStore
-	zitiMgmt zitimanagementv1.ZitiManagementServiceClient
-	runners  grpcRunnersClientFactory
-	authz    authorizationv1.AuthorizationServiceClient
-}
-
-type grpcRunnersClientFactory interface {
-	client(ctx context.Context) (runnersv1.RunnersServiceClient, error)
-}
-
-type identityRunnersClientFactory struct {
-	conn grpc.ClientConnInterface
-}
-
-func (f identityRunnersClientFactory) client(ctx context.Context) (runnersv1.RunnersServiceClient, error) {
-	identity, err := identityFromContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return runnersv1.NewRunnersServiceClient(outgoingIdentityConn{
-		conn:     f.conn,
-		identity: identity,
-	}), nil
-}
-
-type outgoingIdentityConn struct {
-	conn     grpc.ClientConnInterface
-	identity resolvedIdentity
-}
-
-func (c outgoingIdentityConn) Invoke(ctx context.Context, method string, args any, reply any, opts ...grpc.CallOption) error {
-	return c.conn.Invoke(outgoingContextWithIdentity(ctx, c.identity), method, args, reply, opts...)
-}
-
-func (c outgoingIdentityConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	return c.conn.NewStream(outgoingContextWithIdentity(ctx, c.identity), desc, method, opts...)
-}
-
 func New(store ExposureStore, zitiMgmt zitimanagementv1.ZitiManagementServiceClient, runners runnersv1.RunnersServiceClient, authz authorizationv1.AuthorizationServiceClient) *Server {
 	if authz == nil {
 		panic("authorization client is required")
 	}
 	return &Server{store: store, zitiMgmt: zitiMgmt, runners: runners, authz: authz}
-}
-
-func NewGRPCServer(store ExposureStore, zitiMgmt zitimanagementv1.ZitiManagementServiceClient, runnersConn grpc.ClientConnInterface, authz authorizationv1.AuthorizationServiceClient) *GRPCServer {
-	if authz == nil {
-		panic("authorization client is required")
-	}
-	return &GRPCServer{
-		store:    store,
-		zitiMgmt: zitiMgmt,
-		runners:  identityRunnersClientFactory{conn: runnersConn},
-		authz:    authz,
-	}
-}
-
-func (s *GRPCServer) AddExposure(ctx context.Context, req *exposev1.AddExposureRequest) (*exposev1.AddExposureResponse, error) {
-	server, err := s.requestServer(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return server.AddExposure(ctx, req)
-}
-
-func (s *GRPCServer) RemoveExposure(ctx context.Context, req *exposev1.RemoveExposureRequest) (*exposev1.RemoveExposureResponse, error) {
-	server, err := s.requestServer(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return server.RemoveExposure(ctx, req)
-}
-
-func (s *GRPCServer) ListExposures(ctx context.Context, req *exposev1.ListExposuresRequest) (*exposev1.ListExposuresResponse, error) {
-	server, err := s.requestServer(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return server.ListExposures(ctx, req)
-}
-
-func (s *GRPCServer) requestServer(ctx context.Context) (*Server, error) {
-	runners, err := s.runners.client(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return &Server{
-		store:    s.store,
-		zitiMgmt: s.zitiMgmt,
-		runners:  runners,
-		authz:    s.authz,
-	}, nil
 }
 
 func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureRequest) (*exposev1.AddExposureResponse, error) {

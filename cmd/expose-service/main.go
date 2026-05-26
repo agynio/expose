@@ -85,7 +85,7 @@ func run() error {
 	authorizationClient := authorizationv1.NewAuthorizationServiceClient(authorizationConn)
 
 	grpcServer := grpc.NewServer()
-	exposev1.RegisterExposeServiceServer(grpcServer, server.NewGRPCServer(storeClient, zitiClient, runnersConn, authorizationClient))
+	exposev1.RegisterExposeServiceServer(grpcServer, server.New(storeClient, zitiClient, runnersClient, authorizationClient))
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddress)
 	if err != nil {
