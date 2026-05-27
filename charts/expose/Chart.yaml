@@ -2,8 +2,8 @@ apiVersion: v2
 name: expose
 description: Helm chart for deploying the ExposeService gRPC server.
 type: application
-version: 0.1.0
-appVersion: 0.1.0
+version: 0.1.5
+appVersion: 0.1.5
 home: https://github.com/agynio/expose
 sources:
   - https://github.com/agynio/expose
