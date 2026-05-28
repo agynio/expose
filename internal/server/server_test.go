@@ -423,7 +423,7 @@ func TestAddExposureHappyPath(t *testing.T) {
 	if len(serviceReq.GetRoleAttributes()) != 1 || serviceReq.GetRoleAttributes()[0] != "exposed-services" {
 		t.Fatalf("unexpected role attributes %v", serviceReq.GetRoleAttributes())
 	}
-	if serviceReq.GetHostV1Config().GetAddress() != "127.0.0.1" {
+	if serviceReq.GetHostV1Config().GetAddress() != exposureHostAddress {
 		t.Fatalf("unexpected host address %q", serviceReq.GetHostV1Config().GetAddress())
 	}
 	if serviceReq.GetHostV1Config().GetPort() != 8080 {

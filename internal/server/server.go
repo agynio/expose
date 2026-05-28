@@ -17,6 +17,8 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+const exposureHostAddress = "localhost"
+
 type ExposureStore interface {
 	CreateExposure(ctx context.Context, exposure store.Exposure) error
 	GetExposure(ctx context.Context, id uuid.UUID) (store.Exposure, error)
@@ -123,7 +125,7 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 		RoleAttributes: []string{"exposed-services"},
 		HostV1Config: &zitimanagementv1.HostV1Config{
 			Protocol: "tcp",
-			Address:  "127.0.0.1",
+			Address:  exposureHostAddress,
 			Port:     port,
 		},
 		InterceptV1Config: &zitimanagementv1.InterceptV1Config{
