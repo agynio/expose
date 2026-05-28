@@ -123,7 +123,7 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 		RoleAttributes: []string{"exposed-services"},
 		HostV1Config: &zitimanagementv1.HostV1Config{
 			Protocol: "tcp",
-			Address:  "localhost",
+			Address:  "127.0.0.1",
 			Port:     port,
 		},
 		InterceptV1Config: &zitimanagementv1.InterceptV1Config{
