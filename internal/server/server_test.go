@@ -1218,15 +1218,19 @@ func TestDebugExposureEndpointReturnsZitiState(t *testing.T) {
 	}
 	zitiMock := &mockZitiMgmt{
 		debugServiceState: func(_ context.Context, req *zitimanagementv1.DebugServiceStateRequest) (*zitimanagementv1.DebugServiceStateResponse, error) {
+			if _, ok := req.GetServiceIdentifier().(*zitimanagementv1.DebugServiceStateRequest_ZitiServiceId); !ok {
+				t.Fatalf("expected service id identifier, got %T", req.GetServiceIdentifier())
+			}
 			if req.GetZitiServiceId() != "svc-id" {
 				t.Fatalf("expected service id svc-id, got %s", req.GetZitiServiceId())
 			}
-			if req.GetZitiServiceName() != "exposed-"+exposureID.String() {
-				t.Fatalf("unexpected service name %s", req.GetZitiServiceName())
+			serviceName := "exposed-" + exposureID.String()
+			if req.GetZitiServiceName() != "" {
+				t.Fatalf("expected empty service name with id identifier, got %s", req.GetZitiServiceName())
 			}
 			return &zitimanagementv1.DebugServiceStateResponse{
 				ZitiServiceId:   "svc-id",
-				ZitiServiceName: req.GetZitiServiceName(),
+				ZitiServiceName: serviceName,
 				RoleAttributes:  []string{"exposed-services"},
 				Configs: []*zitimanagementv1.DebugConfig{{
 					Id:             "cfg-id",

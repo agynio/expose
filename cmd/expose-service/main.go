@@ -90,12 +90,15 @@ func run() error {
 
 	var httpServer *http.Server
 	if cfg.DebugEndpointsEnabled {
+		debugLis, err := net.Listen("tcp", cfg.HTTPAddress)
+		if err != nil {
+			return fmt.Errorf("listen for debug http on %s: %w", cfg.HTTPAddress, err)
+		}
 		httpServer = &http.Server{
-			Addr:    cfg.HTTPAddress,
 			Handler: server.NewDebugHTTPServer(storeClient, zitiClient, cfg.DebugToken).Handler(),
 		}
 		go func() {
-			if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := httpServer.Serve(debugLis); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Printf("debug http server error: %v", err)
 			}
 		}()

@@ -116,14 +116,22 @@ func (s *DebugHTTPServer) debugExposureState(ctx context.Context, exposureID uui
 		return DebugExposureState{}, toStatusError(err)
 	}
 	serviceName := exposureServiceName(exposure.ID)
-	resp, err := s.zitiMgmt.DebugServiceState(ctx, &zitimanagementv1.DebugServiceStateRequest{
-		ZitiServiceId:   exposure.OpenZitiServiceID,
-		ZitiServiceName: serviceName,
-	})
+	resp, err := s.zitiMgmt.DebugServiceState(ctx, debugServiceStateRequest(exposure.OpenZitiServiceID, serviceName))
 	if err != nil {
 		return DebugExposureState{}, err
 	}
 	return toDebugExposureState(exposure, serviceName, resp)
+}
+
+func debugServiceStateRequest(serviceID, serviceName string) *zitimanagementv1.DebugServiceStateRequest {
+	if strings.TrimSpace(serviceID) != "" {
+		return &zitimanagementv1.DebugServiceStateRequest{
+			ServiceIdentifier: &zitimanagementv1.DebugServiceStateRequest_ZitiServiceId{ZitiServiceId: serviceID},
+		}
+	}
+	return &zitimanagementv1.DebugServiceStateRequest{
+		ServiceIdentifier: &zitimanagementv1.DebugServiceStateRequest_ZitiServiceName{ZitiServiceName: serviceName},
+	}
 }
 
 func parseDebugExposureID(path string) (uuid.UUID, error) {
