@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"strings"
 
 	exposev1 "github.com/agynio/expose/.gen/go/agynio/api/expose/v1"
 	"github.com/agynio/expose/internal/store"
@@ -21,6 +22,9 @@ func parseUUID(value string, field string) (uuid.UUID, error) {
 }
 
 func toProtoExposure(exposure store.Exposure) *exposev1.Exposure {
+	if exposure.Status == store.ExposureStatusActive && !exposureResourcesComplete(exposure) {
+		panic(fmt.Sprintf("active exposure %s has incomplete OpenZiti resources", exposure.ID))
+	}
 	return &exposev1.Exposure{
 		Meta: &exposev1.EntityMeta{
 			Id:        exposure.ID.String(),
@@ -36,6 +40,13 @@ func toProtoExposure(exposure store.Exposure) *exposev1.Exposure {
 		Url:                  exposure.URL,
 		Status:               toProtoExposureStatus(exposure.Status),
 	}
+}
+
+func exposureResourcesComplete(exposure store.Exposure) bool {
+	return strings.TrimSpace(exposure.OpenZitiServiceID) != "" &&
+		strings.TrimSpace(exposure.OpenZitiBindPolicyID) != "" &&
+		strings.TrimSpace(exposure.OpenZitiDialPolicyID) != "" &&
+		strings.TrimSpace(exposure.URL) != ""
 }
 
 func toProtoExposureStatus(status store.ExposureStatus) exposev1.ExposureStatus {

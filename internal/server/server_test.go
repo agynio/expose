@@ -695,18 +695,24 @@ func TestAddExposureExplicitClusterAdmin(t *testing.T) {
 		created = exposure
 		return nil
 	}
-	storeMock.updateExposureProvisioned = func(context.Context, uuid.UUID, store.ExposureResourceIDs) error {
+	var provisioned store.ExposureResourceIDs
+	storeMock.updateExposureProvisioned = func(_ context.Context, _ uuid.UUID, resources store.ExposureResourceIDs) error {
+		provisioned = resources
 		return nil
 	}
 	storeMock.getExposure = func(_ context.Context, id uuid.UUID) (store.Exposure, error) {
 		return store.Exposure{
-			ID:         id,
-			WorkloadID: workloadID,
-			AgentID:    agentID,
-			Port:       8080,
-			Status:     store.ExposureStatusActive,
-			CreatedAt:  time.Now(),
-			UpdatedAt:  time.Now(),
+			ID:                   id,
+			WorkloadID:           workloadID,
+			AgentID:              agentID,
+			Port:                 8080,
+			OpenZitiServiceID:    provisioned.OpenZitiServiceID,
+			OpenZitiBindPolicyID: provisioned.OpenZitiBindPolicyID,
+			OpenZitiDialPolicyID: provisioned.OpenZitiDialPolicyID,
+			URL:                  provisioned.URL,
+			Status:               store.ExposureStatusActive,
+			CreatedAt:            time.Now(),
+			UpdatedAt:            time.Now(),
 		}, nil
 	}
 
@@ -1229,13 +1235,17 @@ func TestListExposuresSuccess(t *testing.T) {
 		listExposuresByWorkload: func(_ context.Context, id uuid.UUID, size int32, cursor *store.PageCursor) (store.ListResult, error) {
 			return store.ListResult{
 				Exposures: []store.Exposure{{
-					ID:         workloadID,
-					WorkloadID: workloadID,
-					AgentID:    uuid.New(),
-					Port:       8080,
-					Status:     store.ExposureStatusActive,
-					CreatedAt:  time.Now(),
-					UpdatedAt:  time.Now(),
+					ID:                   workloadID,
+					WorkloadID:           workloadID,
+					AgentID:              uuid.New(),
+					Port:                 8080,
+					OpenZitiServiceID:    "svc-id",
+					OpenZitiBindPolicyID: "bind-id",
+					OpenZitiDialPolicyID: "dial-id",
+					URL:                  "http://exposed.ziti:8080",
+					Status:               store.ExposureStatusActive,
+					CreatedAt:            time.Now(),
+					UpdatedAt:            time.Now(),
 				}},
 				NextCursor: &store.PageCursor{AfterID: nextID},
 			}, nil

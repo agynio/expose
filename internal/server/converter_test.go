@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -59,6 +60,29 @@ func TestParseUUID(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestToProtoExposurePanicsForActiveWithoutResources(t *testing.T) {
+	exposure := store.Exposure{
+		ID:         uuid.New(),
+		WorkloadID: uuid.New(),
+		AgentID:    uuid.New(),
+		Port:       8080,
+		Status:     store.ExposureStatusActive,
+	}
+
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatal("expected panic for active exposure with incomplete resources")
+		}
+		message := fmt.Sprint(recovered)
+		if !strings.Contains(message, "incomplete OpenZiti resources") {
+			t.Fatalf("unexpected panic: %v", recovered)
+		}
+	}()
+
+	_ = toProtoExposure(exposure)
 }
 
 func TestToProtoExposureStatus(t *testing.T) {
