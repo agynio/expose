@@ -139,6 +139,10 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 		return nil, status.Errorf(codes.Internal, "create service: %v", err)
 	}
 	serviceID := serviceResp.GetZitiServiceId()
+	if serviceID == "" {
+		s.handleProvisioningFailure(ctx, exposureID, resources)
+		return nil, status.Error(codes.Internal, "create service: missing ziti_service_id")
+	}
 	resources.OpenZitiServiceID = serviceID
 
 	bindResp, err := s.zitiMgmt.CreateServicePolicy(ctx, &zitimanagementv1.CreateServicePolicyRequest{
@@ -151,7 +155,12 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 		s.handleProvisioningFailure(ctx, exposureID, resources)
 		return nil, status.Errorf(codes.Internal, "create bind policy: %v", err)
 	}
-	resources.OpenZitiBindPolicyID = bindResp.GetZitiServicePolicyId()
+	bindPolicyID := bindResp.GetZitiServicePolicyId()
+	if bindPolicyID == "" {
+		s.handleProvisioningFailure(ctx, exposureID, resources)
+		return nil, status.Error(codes.Internal, "create bind policy: missing ziti_service_policy_id")
+	}
+	resources.OpenZitiBindPolicyID = bindPolicyID
 
 	dialResp, err := s.zitiMgmt.CreateServicePolicy(ctx, &zitimanagementv1.CreateServicePolicyRequest{
 		Type:          zitimanagementv1.ServicePolicyType_SERVICE_POLICY_TYPE_DIAL,
@@ -163,7 +172,12 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 		s.handleProvisioningFailure(ctx, exposureID, resources)
 		return nil, status.Errorf(codes.Internal, "create dial policy: %v", err)
 	}
-	resources.OpenZitiDialPolicyID = dialResp.GetZitiServicePolicyId()
+	dialPolicyID := dialResp.GetZitiServicePolicyId()
+	if dialPolicyID == "" {
+		s.handleProvisioningFailure(ctx, exposureID, resources)
+		return nil, status.Error(codes.Internal, "create dial policy: missing ziti_service_policy_id")
+	}
+	resources.OpenZitiDialPolicyID = dialPolicyID
 
 	if err := s.store.UpdateExposureProvisioned(ctx, exposureID, resources); err != nil {
 		s.handleProvisioningFailure(ctx, exposureID, resources)

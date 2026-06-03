@@ -203,6 +203,9 @@ func (s *Store) ListAllActiveWorkloadIDs(ctx context.Context) ([]uuid.UUID, erro
 }
 
 func (s *Store) UpdateExposureProvisioned(ctx context.Context, id uuid.UUID, resources ExposureResourceIDs) error {
+	if !resources.Complete() {
+		return ErrExposureResourcesIncomplete
+	}
 	cmd, err := s.pool.Exec(ctx,
 		`UPDATE exposures SET openziti_service_id = $2, openziti_bind_policy_id = $3, openziti_dial_policy_id = $4, url = $5, status = $6, updated_at = NOW() WHERE id = $1`,
 		id,

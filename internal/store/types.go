@@ -9,6 +9,7 @@ import (
 
 var ErrExposureNotFound = errors.New("exposure not found")
 var ErrExposureAlreadyExists = errors.New("exposure already exists")
+var ErrExposureResourcesIncomplete = errors.New("exposure resources incomplete")
 
 type ExposureStatus int16
 
@@ -38,6 +39,13 @@ type ExposureResourceIDs struct {
 	OpenZitiBindPolicyID string
 	OpenZitiDialPolicyID string
 	URL                  string
+}
+
+func (resources ExposureResourceIDs) Complete() bool {
+	return resources.OpenZitiServiceID != "" &&
+		resources.OpenZitiBindPolicyID != "" &&
+		resources.OpenZitiDialPolicyID != "" &&
+		resources.URL != ""
 }
 
 type PageCursor struct {
