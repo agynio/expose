@@ -1,5 +1,5 @@
 nameOverride: ""
-fullnameOverride: ""
+fullnameOverride: "expose"
 
 global:
   imageRegistry: ""
@@ -73,7 +73,10 @@ env:
   - name: GRPC_ADDRESS
     value: ":50051"
   - name: DATABASE_URL
-    value: ""
+    valueFrom:
+      secretKeyRef:
+        name: agyn-platform-database-urls
+        key: expose
   - name: ZITI_MANAGEMENT_ADDRESS
     value: "ziti-management:50051"
   - name: RUNNERS_ADDRESS
