@@ -22,7 +22,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 COPY buf.gen.yaml buf.yaml ./
-RUN buf generate buf.build/agynio/api --include-imports \
+RUN buf generate "https://github.com/agynio/api.git#branch=noa/ziti-debug-state,subdir=proto" --include-imports \
     --path agynio/api/expose/v1 \
     --path agynio/api/ziti_management/v1 \
     --path agynio/api/runners/v1 \

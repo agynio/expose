@@ -8,12 +8,15 @@ import (
 
 type Config struct {
 	GRPCAddress            string
+	HTTPAddress            string
 	DatabaseURL            string
 	ZitiManagementAddress  string
 	RunnersAddress         string
 	NotificationsAddress   string
 	AuthorizationAddress   string
 	ReconciliationInterval time.Duration
+	DebugEndpointsEnabled  bool
+	DebugToken             string
 }
 
 func FromEnv() (Config, error) {
@@ -21,6 +24,10 @@ func FromEnv() (Config, error) {
 	cfg.GRPCAddress = os.Getenv("GRPC_ADDRESS")
 	if cfg.GRPCAddress == "" {
 		cfg.GRPCAddress = ":50051"
+	}
+	cfg.HTTPAddress = os.Getenv("HTTP_ADDRESS")
+	if cfg.HTTPAddress == "" {
+		cfg.HTTPAddress = ":8080"
 	}
 	cfg.DatabaseURL = os.Getenv("DATABASE_URL")
 	if cfg.DatabaseURL == "" {
@@ -47,7 +54,17 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 	cfg.ReconciliationInterval = interval
+	cfg.DebugEndpointsEnabled = boolFromEnv("EXPOSE_DEBUG_ENDPOINTS")
+	cfg.DebugToken = os.Getenv("EXPOSE_DEBUG_TOKEN")
+	if cfg.DebugEndpointsEnabled && cfg.DebugToken == "" {
+		return Config{}, fmt.Errorf("EXPOSE_DEBUG_TOKEN must be set when EXPOSE_DEBUG_ENDPOINTS is enabled")
+	}
 	return cfg, nil
+}
+
+func boolFromEnv(key string) bool {
+	value := os.Getenv(key)
+	return value == "1" || value == "true" || value == "TRUE" || value == "yes" || value == "YES"
 }
 
 func durationFromEnv(key string, defaultValue time.Duration) (time.Duration, error) {

@@ -132,6 +132,10 @@ func (m *mockZitiMgmt) DeleteService(ctx context.Context, req *zitimanagementv1.
 	return m.deleteSvc(ctx, req)
 }
 
+func (m *mockZitiMgmt) DebugServiceState(context.Context, *zitimanagementv1.DebugServiceStateRequest, ...grpc.CallOption) (*zitimanagementv1.DebugServiceStateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
 func (m *mockZitiMgmt) CreateDeviceIdentity(context.Context, *zitimanagementv1.CreateDeviceIdentityRequest, ...grpc.CallOption) (*zitimanagementv1.CreateDeviceIdentityResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }

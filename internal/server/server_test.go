@@ -2,8 +2,11 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -94,6 +97,7 @@ type mockZitiMgmt struct {
 	createServicePolicy func(ctx context.Context, req *zitimanagementv1.CreateServicePolicyRequest) (*zitimanagementv1.CreateServicePolicyResponse, error)
 	deleteServicePolicy func(ctx context.Context, req *zitimanagementv1.DeleteServicePolicyRequest) (*zitimanagementv1.DeleteServicePolicyResponse, error)
 	deleteService       func(ctx context.Context, req *zitimanagementv1.DeleteServiceRequest) (*zitimanagementv1.DeleteServiceResponse, error)
+	debugServiceState   func(ctx context.Context, req *zitimanagementv1.DebugServiceStateRequest) (*zitimanagementv1.DebugServiceStateResponse, error)
 }
 
 func (m *mockZitiMgmt) CreateAgentIdentity(context.Context, *zitimanagementv1.CreateAgentIdentityRequest, ...grpc.CallOption) (*zitimanagementv1.CreateAgentIdentityResponse, error) {
@@ -162,6 +166,13 @@ func (m *mockZitiMgmt) DeleteService(ctx context.Context, req *zitimanagementv1.
 		return nil, errors.New("not implemented")
 	}
 	return m.deleteService(ctx, req)
+}
+
+func (m *mockZitiMgmt) DebugServiceState(ctx context.Context, req *zitimanagementv1.DebugServiceStateRequest, _ ...grpc.CallOption) (*zitimanagementv1.DebugServiceStateResponse, error) {
+	if m.debugServiceState == nil {
+		return nil, errors.New("not implemented")
+	}
+	return m.debugServiceState(ctx, req)
 }
 
 func (m *mockZitiMgmt) CreateDeviceIdentity(context.Context, *zitimanagementv1.CreateDeviceIdentityRequest, ...grpc.CallOption) (*zitimanagementv1.CreateDeviceIdentityResponse, error) {
@@ -1363,5 +1374,109 @@ func TestListExposuresStoreError(t *testing.T) {
 	_, err := svc.ListExposures(ctx, &exposev1.ListExposuresRequest{WorkloadId: workloadID.String()})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected internal error, got %v", err)
+	}
+}
+
+func TestDebugExposureEndpointReturnsZitiState(t *testing.T) {
+	exposureID := uuid.New()
+	storeMock := &mockStore{
+		getExposure: func(_ context.Context, id uuid.UUID) (store.Exposure, error) {
+			if id != exposureID {
+				return store.Exposure{}, fmt.Errorf("unexpected exposure id %s", id)
+			}
+			return store.Exposure{
+				ID:                   exposureID,
+				OpenZitiServiceID:    "svc-id",
+				OpenZitiBindPolicyID: "bind-id",
+				OpenZitiDialPolicyID: "dial-id",
+			}, nil
+		},
+	}
+	zitiMock := &mockZitiMgmt{
+		debugServiceState: func(_ context.Context, req *zitimanagementv1.DebugServiceStateRequest) (*zitimanagementv1.DebugServiceStateResponse, error) {
+			if _, ok := req.GetServiceIdentifier().(*zitimanagementv1.DebugServiceStateRequest_ZitiServiceId); !ok {
+				t.Fatalf("expected service id identifier, got %T", req.GetServiceIdentifier())
+			}
+			if req.GetZitiServiceId() != "svc-id" {
+				t.Fatalf("expected service id svc-id, got %s", req.GetZitiServiceId())
+			}
+			serviceName := "exposed-" + exposureID.String()
+			if req.GetZitiServiceName() != "" {
+				t.Fatalf("expected empty service name with id identifier, got %s", req.GetZitiServiceName())
+			}
+			return &zitimanagementv1.DebugServiceStateResponse{
+				ZitiServiceId:   "svc-id",
+				ZitiServiceName: serviceName,
+				RoleAttributes:  []string{"exposed-services"},
+				Configs: []*zitimanagementv1.DebugConfig{{
+					Id:             "cfg-id",
+					Name:           "svc-host-v1",
+					ConfigTypeName: "host.v1",
+					Json:           `{"address":"127.0.0.1","port":3000}`,
+				}},
+				ServicePolicies: []*zitimanagementv1.DebugServicePolicy{{
+					Id:            "bind-id",
+					Name:          "bind",
+					Type:          "Bind",
+					IdentityRoles: []string{"#workload-id"},
+					ServiceRoles:  []string{"@svc-id"},
+				}, {
+					Id:            "dial-id",
+					Name:          "dial",
+					Type:          "Dial",
+					IdentityRoles: []string{"#all"},
+					ServiceRoles:  []string{"@svc-id"},
+				}},
+				Terminators: []*zitimanagementv1.DebugTerminator{{
+					Id:         "terminator-id",
+					Identity:   "identity-id",
+					RouterName: "router",
+					Precedence: "default",
+					Cost:       10,
+				}},
+			}, nil
+		},
+	}
+
+	debugServer := NewDebugHTTPServer(storeMock, zitiMock, "secret")
+	req := httptest.NewRequest(http.MethodGet, "/debug/ziti/exposures/"+exposureID.String(), nil)
+	req.Header.Set(debugTokenHeader, "secret")
+	recorder := httptest.NewRecorder()
+
+	debugServer.Handler().ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var payload DebugExposureState
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.ExposureID != exposureID.String() {
+		t.Fatalf("unexpected exposure id %s", payload.ExposureID)
+	}
+	if payload.BindPolicy == nil || payload.BindPolicy.ID != "bind-id" {
+		t.Fatalf("expected bind policy, got %#v", payload.BindPolicy)
+	}
+	if payload.DialPolicy == nil || payload.DialPolicy.ID != "dial-id" {
+		t.Fatalf("expected dial policy, got %#v", payload.DialPolicy)
+	}
+	if len(payload.Configs) != 1 || string(payload.Configs[0].Data) != `{"address":"127.0.0.1","port":3000}` {
+		t.Fatalf("unexpected configs %#v", payload.Configs)
+	}
+	if len(payload.Terminators) != 1 || payload.Terminators[0].ID != "terminator-id" {
+		t.Fatalf("unexpected terminators %#v", payload.Terminators)
+	}
+}
+
+func TestDebugExposureEndpointRequiresToken(t *testing.T) {
+	debugServer := NewDebugHTTPServer(&mockStore{}, &mockZitiMgmt{}, "secret")
+	req := httptest.NewRequest(http.MethodGet, "/debug/ziti/exposures/"+uuid.New().String(), nil)
+	recorder := httptest.NewRecorder()
+
+	debugServer.Handler().ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d", recorder.Code)
 	}
 }

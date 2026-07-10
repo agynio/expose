@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -87,6 +88,22 @@ func run() error {
 	grpcServer := grpc.NewServer()
 	exposev1.RegisterExposeServiceServer(grpcServer, server.New(storeClient, zitiClient, runnersClient, authorizationClient))
 
+	var httpServer *http.Server
+	if cfg.DebugEndpointsEnabled {
+		debugLis, err := net.Listen("tcp", cfg.HTTPAddress)
+		if err != nil {
+			return fmt.Errorf("listen for debug http on %s: %w", cfg.HTTPAddress, err)
+		}
+		httpServer = &http.Server{
+			Handler: server.NewDebugHTTPServer(storeClient, zitiClient, cfg.DebugToken).Handler(),
+		}
+		go func() {
+			if err := httpServer.Serve(debugLis); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("debug http server error: %v", err)
+			}
+		}()
+	}
+
 	lis, err := net.Listen("tcp", cfg.GRPCAddress)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", cfg.GRPCAddress, err)
@@ -95,11 +112,19 @@ func run() error {
 	go func() {
 		<-ctx.Done()
 		grpcServer.GracefulStop()
+		if httpServer != nil {
+			if err := httpServer.Shutdown(context.Background()); err != nil {
+				log.Printf("debug http server shutdown error: %v", err)
+			}
+		}
 	}()
 
 	go reconciler.New(storeClient, zitiClient, runnersClient, notificationsClient, cfg.ReconciliationInterval).Run(ctx)
 
 	log.Printf("ExposeService listening on %s", cfg.GRPCAddress)
+	if cfg.DebugEndpointsEnabled {
+		log.Printf("Expose debug HTTP listening on %s", cfg.HTTPAddress)
+	}
 
 	if err := grpcServer.Serve(lis); err != nil {
 		if errors.Is(err, grpc.ErrServerStopped) {
