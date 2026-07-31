@@ -74,6 +74,58 @@ func (m *mockZitiMgmt) CreateAgentIdentity(context.Context, *zitimanagementv1.Cr
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
+func (m *mockZitiMgmt) CreateSandboxIdentity(context.Context, *zitimanagementv1.CreateSandboxIdentityRequest, ...grpc.CallOption) (*zitimanagementv1.CreateSandboxIdentityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockZitiMgmt) CreateTunnelIdentity(context.Context, *zitimanagementv1.CreateTunnelIdentityRequest, ...grpc.CallOption) (*zitimanagementv1.CreateTunnelIdentityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockZitiMgmt) DeleteTunnelIdentity(context.Context, *zitimanagementv1.DeleteTunnelIdentityRequest, ...grpc.CallOption) (*zitimanagementv1.DeleteTunnelIdentityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockZitiMgmt) GetIdentityLiveness(context.Context, *zitimanagementv1.GetIdentityLivenessRequest, ...grpc.CallOption) (*zitimanagementv1.GetIdentityLivenessResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockZitiMgmt) GetService(context.Context, *zitimanagementv1.GetServiceRequest, ...grpc.CallOption) (*zitimanagementv1.GetServiceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockZitiMgmt) GetServicePolicy(context.Context, *zitimanagementv1.GetServicePolicyRequest, ...grpc.CallOption) (*zitimanagementv1.GetServicePolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockZitiMgmt) ListIdentitiesByTag(context.Context, *zitimanagementv1.ListIdentitiesByTagRequest, ...grpc.CallOption) (*zitimanagementv1.ListIdentitiesByTagResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockZitiMgmt) ListServicePolicies(context.Context, *zitimanagementv1.ListServicePoliciesRequest, ...grpc.CallOption) (*zitimanagementv1.ListServicePoliciesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockZitiMgmt) ListServicePoliciesByTag(context.Context, *zitimanagementv1.ListServicePoliciesByTagRequest, ...grpc.CallOption) (*zitimanagementv1.ListServicePoliciesByTagResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockZitiMgmt) ListServices(context.Context, *zitimanagementv1.ListServicesRequest, ...grpc.CallOption) (*zitimanagementv1.ListServicesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockZitiMgmt) ListServicesByTag(context.Context, *zitimanagementv1.ListServicesByTagRequest, ...grpc.CallOption) (*zitimanagementv1.ListServicesByTagResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockZitiMgmt) PatchIdentityRoleAttributes(context.Context, *zitimanagementv1.PatchIdentityRoleAttributesRequest, ...grpc.CallOption) (*zitimanagementv1.PatchIdentityRoleAttributesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockZitiMgmt) UpdateService(context.Context, *zitimanagementv1.UpdateServiceRequest, ...grpc.CallOption) (*zitimanagementv1.UpdateServiceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
 func (m *mockZitiMgmt) CreateAppIdentity(context.Context, *zitimanagementv1.CreateAppIdentityRequest, ...grpc.CallOption) (*zitimanagementv1.CreateAppIdentityResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
@@ -142,6 +194,42 @@ func (m *mockZitiMgmt) DeleteDeviceIdentity(context.Context, *zitimanagementv1.D
 
 type mockRunners struct {
 	getWorkload func(ctx context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error)
+}
+
+func (m *mockRunners) CreateFlavor(context.Context, *runnersv1.CreateFlavorRequest, ...grpc.CallOption) (*runnersv1.CreateFlavorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) GetFlavor(context.Context, *runnersv1.GetFlavorRequest, ...grpc.CallOption) (*runnersv1.GetFlavorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) UpdateFlavor(context.Context, *runnersv1.UpdateFlavorRequest, ...grpc.CallOption) (*runnersv1.UpdateFlavorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) DeleteFlavor(context.Context, *runnersv1.DeleteFlavorRequest, ...grpc.CallOption) (*runnersv1.DeleteFlavorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) ListFlavors(context.Context, *runnersv1.ListFlavorsRequest, ...grpc.CallOption) (*runnersv1.ListFlavorsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) ReportRunnerCatalog(context.Context, *runnersv1.ReportRunnerCatalogRequest, ...grpc.CallOption) (*runnersv1.ReportRunnerCatalogResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) ListStorageClasses(context.Context, *runnersv1.ListStorageClassesRequest, ...grpc.CallOption) (*runnersv1.ListStorageClassesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) ListWorkloadsByAgentInstance(context.Context, *runnersv1.ListWorkloadsByAgentInstanceRequest, ...grpc.CallOption) (*runnersv1.ListWorkloadsByAgentInstanceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) ListVolumesByAgentInstance(context.Context, *runnersv1.ListVolumesByAgentInstanceRequest, ...grpc.CallOption) (*runnersv1.ListVolumesByAgentInstanceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
 func (m *mockRunners) RegisterRunner(context.Context, *runnersv1.RegisterRunnerRequest, ...grpc.CallOption) (*runnersv1.RegisterRunnerResponse, error) {

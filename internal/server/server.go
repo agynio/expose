@@ -66,7 +66,7 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 		workloadID = parsedWorkloadID
 		agentID = parsedAgentID
 	} else {
-		if caller.identity.identityType != identityTypeAgent {
+		if !caller.identity.identityType.isAgentWorkload() {
 			return nil, status.Error(codes.PermissionDenied, "permission denied")
 		}
 		resolvedWorkloadID, err := resolveWorkloadIDFromRequest(caller, "")
@@ -452,7 +452,7 @@ func workloadOrganizationID(workload *runnersv1.Workload) (uuid.UUID, error) {
 }
 
 func agentMatchesWorkload(caller exposureCaller, agentID uuid.UUID) (bool, error) {
-	if caller.identity.identityType != identityTypeAgent {
+	if !caller.identity.identityType.isAgentWorkload() {
 		return false, nil
 	}
 	callerID, err := parseIdentityUUID(caller.identity.identityID)

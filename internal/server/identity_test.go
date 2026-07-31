@@ -138,3 +138,25 @@ func TestRequireOrgRelation(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// An agent workload authenticates as its instance. If the type does not parse
+// or does not count as an agent workload, the workload cannot manage the
+// exposures it owns.
+func TestAgentInstanceIdentityIsAnAgentWorkload(t *testing.T) {
+	parsed, err := parseIdentityType("agent_instance")
+	if err != nil {
+		t.Fatalf("parse agent_instance: %v", err)
+	}
+	if parsed != identityTypeAgentInstance {
+		t.Fatalf("parsed = %q, want agent_instance", parsed)
+	}
+	if !parsed.isAgentWorkload() {
+		t.Fatal("agent_instance must count as an agent workload")
+	}
+	if !identityTypeAgent.isAgentWorkload() {
+		t.Fatal("pre-migration agent identities must keep working")
+	}
+	if identityTypeUser.isAgentWorkload() {
+		t.Fatal("user identities are not agent workloads")
+	}
+}
