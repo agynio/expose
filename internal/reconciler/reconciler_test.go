@@ -66,56 +66,13 @@ func (m *mockReconcilerStore) DeleteExposure(ctx context.Context, id uuid.UUID) 
 }
 
 type mockZitiMgmt struct {
+	// Embedded so the mock satisfies the client without restating it.
+	// Adding an RPC to the API cannot break this; calling one the test did
+	// not override panics, which is what a test wants.
+	zitimanagementv1.ZitiManagementServiceClient
+
 	deletePolicy func(ctx context.Context, req *zitimanagementv1.DeleteServicePolicyRequest) (*zitimanagementv1.DeleteServicePolicyResponse, error)
 	deleteSvc    func(ctx context.Context, req *zitimanagementv1.DeleteServiceRequest) (*zitimanagementv1.DeleteServiceResponse, error)
-}
-
-func (m *mockZitiMgmt) CreateAgentIdentity(context.Context, *zitimanagementv1.CreateAgentIdentityRequest, ...grpc.CallOption) (*zitimanagementv1.CreateAgentIdentityResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockZitiMgmt) CreateAppIdentity(context.Context, *zitimanagementv1.CreateAppIdentityRequest, ...grpc.CallOption) (*zitimanagementv1.CreateAppIdentityResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockZitiMgmt) CreateService(context.Context, *zitimanagementv1.CreateServiceRequest, ...grpc.CallOption) (*zitimanagementv1.CreateServiceResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockZitiMgmt) DeleteIdentity(context.Context, *zitimanagementv1.DeleteIdentityRequest, ...grpc.CallOption) (*zitimanagementv1.DeleteIdentityResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockZitiMgmt) DeleteAppIdentity(context.Context, *zitimanagementv1.DeleteAppIdentityRequest, ...grpc.CallOption) (*zitimanagementv1.DeleteAppIdentityResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockZitiMgmt) CreateRunnerIdentity(context.Context, *zitimanagementv1.CreateRunnerIdentityRequest, ...grpc.CallOption) (*zitimanagementv1.CreateRunnerIdentityResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockZitiMgmt) DeleteRunnerIdentity(context.Context, *zitimanagementv1.DeleteRunnerIdentityRequest, ...grpc.CallOption) (*zitimanagementv1.DeleteRunnerIdentityResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockZitiMgmt) ListManagedIdentities(context.Context, *zitimanagementv1.ListManagedIdentitiesRequest, ...grpc.CallOption) (*zitimanagementv1.ListManagedIdentitiesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockZitiMgmt) ResolveIdentity(context.Context, *zitimanagementv1.ResolveIdentityRequest, ...grpc.CallOption) (*zitimanagementv1.ResolveIdentityResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockZitiMgmt) RequestServiceIdentity(context.Context, *zitimanagementv1.RequestServiceIdentityRequest, ...grpc.CallOption) (*zitimanagementv1.RequestServiceIdentityResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockZitiMgmt) ExtendIdentityLease(context.Context, *zitimanagementv1.ExtendIdentityLeaseRequest, ...grpc.CallOption) (*zitimanagementv1.ExtendIdentityLeaseResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockZitiMgmt) CreateServicePolicy(context.Context, *zitimanagementv1.CreateServicePolicyRequest, ...grpc.CallOption) (*zitimanagementv1.CreateServicePolicyResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
 func (m *mockZitiMgmt) DeleteServicePolicy(ctx context.Context, req *zitimanagementv1.DeleteServicePolicyRequest, _ ...grpc.CallOption) (*zitimanagementv1.DeleteServicePolicyResponse, error) {
@@ -132,16 +89,44 @@ func (m *mockZitiMgmt) DeleteService(ctx context.Context, req *zitimanagementv1.
 	return m.deleteSvc(ctx, req)
 }
 
-func (m *mockZitiMgmt) CreateDeviceIdentity(context.Context, *zitimanagementv1.CreateDeviceIdentityRequest, ...grpc.CallOption) (*zitimanagementv1.CreateDeviceIdentityResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockZitiMgmt) DeleteDeviceIdentity(context.Context, *zitimanagementv1.DeleteDeviceIdentityRequest, ...grpc.CallOption) (*zitimanagementv1.DeleteDeviceIdentityResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
 type mockRunners struct {
 	getWorkload func(ctx context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error)
+}
+
+func (m *mockRunners) CreateFlavor(context.Context, *runnersv1.CreateFlavorRequest, ...grpc.CallOption) (*runnersv1.CreateFlavorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) GetFlavor(context.Context, *runnersv1.GetFlavorRequest, ...grpc.CallOption) (*runnersv1.GetFlavorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) UpdateFlavor(context.Context, *runnersv1.UpdateFlavorRequest, ...grpc.CallOption) (*runnersv1.UpdateFlavorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) DeleteFlavor(context.Context, *runnersv1.DeleteFlavorRequest, ...grpc.CallOption) (*runnersv1.DeleteFlavorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) ListFlavors(context.Context, *runnersv1.ListFlavorsRequest, ...grpc.CallOption) (*runnersv1.ListFlavorsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) ReportRunnerCatalog(context.Context, *runnersv1.ReportRunnerCatalogRequest, ...grpc.CallOption) (*runnersv1.ReportRunnerCatalogResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) ListStorageClasses(context.Context, *runnersv1.ListStorageClassesRequest, ...grpc.CallOption) (*runnersv1.ListStorageClassesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) ListWorkloadsByAgentInstance(context.Context, *runnersv1.ListWorkloadsByAgentInstanceRequest, ...grpc.CallOption) (*runnersv1.ListWorkloadsByAgentInstanceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockRunners) ListVolumesByAgentInstance(context.Context, *runnersv1.ListVolumesByAgentInstanceRequest, ...grpc.CallOption) (*runnersv1.ListVolumesByAgentInstanceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
 func (m *mockRunners) RegisterRunner(context.Context, *runnersv1.RegisterRunnerRequest, ...grpc.CallOption) (*runnersv1.RegisterRunnerResponse, error) {

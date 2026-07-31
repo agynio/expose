@@ -25,11 +25,19 @@ const (
 type identityType string
 
 const (
-	identityTypeUser   identityType = identitymeta.IdentityTypeUser
-	identityTypeAgent  identityType = identitymeta.IdentityTypeAgent
-	identityTypeApp    identityType = identitymeta.IdentityTypeApp
-	identityTypeRunner identityType = identitymeta.IdentityTypeRunner
+	identityTypeUser          identityType = identitymeta.IdentityTypeUser
+	identityTypeAgent         identityType = identitymeta.IdentityTypeAgent
+	identityTypeAgentInstance identityType = identitymeta.IdentityTypeAgentInstance
+	identityTypeApp           identityType = identitymeta.IdentityTypeApp
+	identityTypeRunner        identityType = identitymeta.IdentityTypeRunner
 )
+
+// isAgentWorkload reports whether the identity belongs to a running agent.
+// Workloads authenticate as their instance; identities minted before instances
+// existed still present the class type, and both own exposures.
+func (t identityType) isAgentWorkload() bool {
+	return t == identityTypeAgent || t == identityTypeAgentInstance
+}
 
 type resolvedIdentity struct {
 	identityID   string
@@ -82,7 +90,7 @@ func resolveWorkloadIDFromRequest(caller exposureCaller, workloadID string) (str
 	if trimmed != "" {
 		return trimmed, nil
 	}
-	if caller.identity.identityType != identityTypeAgent {
+	if !caller.identity.identityType.isAgentWorkload() {
 		return "", status.Error(codes.InvalidArgument, "workload id is required")
 	}
 	callerWorkloadID := strings.TrimSpace(caller.identity.workloadID)
@@ -155,6 +163,8 @@ func parseIdentityType(value string) (identityType, error) {
 		return identityTypeUser, nil
 	case string(identityTypeAgent):
 		return identityTypeAgent, nil
+	case string(identityTypeAgentInstance):
+		return identityTypeAgentInstance, nil
 	case string(identityTypeApp):
 		return identityTypeApp, nil
 	case string(identityTypeRunner):
