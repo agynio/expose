@@ -114,7 +114,7 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 	}
 
 	serviceName := fmt.Sprintf("exposed-%s", exposureID)
-	interceptAddress := fmt.Sprintf("%s.ziti", serviceName)
+	interceptAddress := fmt.Sprintf("%s.agyn", serviceName)
 	url := fmt.Sprintf("http://%s:%d", interceptAddress, port)
 
 	resources := store.ExposureResourceIDs{URL: url}

@@ -326,7 +326,7 @@ func TestAddExposureHappyPath(t *testing.T) {
 		t.Fatalf("unexpected dial service roles %v", dialReq.GetServiceRoles())
 	}
 
-	expectedURL := fmt.Sprintf("http://%s.ziti:8080", serviceName)
+	expectedURL := fmt.Sprintf("http://%s.agyn:8080", serviceName)
 	if provisioned.URL != expectedURL {
 		t.Fatalf("expected url %s, got %s", expectedURL, provisioned.URL)
 	}
@@ -1120,7 +1120,7 @@ func TestListExposuresSuccess(t *testing.T) {
 					OpenZitiServiceID:    "svc-id",
 					OpenZitiBindPolicyID: "bind-id",
 					OpenZitiDialPolicyID: "dial-id",
-					URL:                  "http://exposed.ziti:8080",
+					URL:                  "http://exposed.agyn:8080",
 					Status:               store.ExposureStatusActive,
 					CreatedAt:            time.Now(),
 					UpdatedAt:            time.Now(),
