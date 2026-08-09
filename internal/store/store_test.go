@@ -17,7 +17,7 @@ func TestUpdateExposureProvisionedRejectsIncompleteResources(t *testing.T) {
 	err := st.UpdateExposureProvisioned(context.Background(), uuid.New(), ExposureResourceIDs{
 		OpenZitiServiceID:    "svc-id",
 		OpenZitiBindPolicyID: "bind-id",
-		URL:                  "http://exposed.ziti:8080",
+		URL:                  "http://exposed.agyn:8080",
 	})
 	if !errors.Is(err, ErrExposureResourcesIncomplete) {
 		t.Fatalf("expected incomplete resources error, got %v", err)
@@ -60,7 +60,7 @@ func TestExposureActiveResourcesConstraint(t *testing.T) {
 		OpenZitiServiceID:    "svc-id",
 		OpenZitiBindPolicyID: "bind-id",
 		OpenZitiDialPolicyID: "dial-id",
-		URL:                  "http://exposed.ziti:8080",
+		URL:                  "http://exposed.agyn:8080",
 	}); err != nil {
 		t.Fatalf("update exposure provisioned: %v", err)
 	}
