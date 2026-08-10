@@ -85,6 +85,14 @@ env:
     value: "notifications:50051"
   - name: AUTHORIZATION_ADDRESS
     value: "authorization:50051"
+  # Name lookups for exposure addresses: the organization slug, plus either a
+  # sandbox name or an agent instance handle.
+  - name: ORGANIZATIONS_ADDRESS
+    value: "organizations:50051"
+  - name: AGENTS_ADDRESS
+    value: "agents:50051"
+  - name: IDENTITY_ADDRESS
+    value: "identity:50051"
   - name: RECONCILIATION_INTERVAL
     value: "30s"
 envFrom: []

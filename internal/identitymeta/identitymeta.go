@@ -10,6 +10,9 @@ const (
 	// IdentityTypeAgent remains for identities minted before the migration.
 	IdentityTypeAgent         = "agent"
 	IdentityTypeAgentInstance = "agent_instance"
-	IdentityTypeApp           = "app"
-	IdentityTypeRunner        = "runner"
+	// A sandbox workload authenticates as its sandbox. It exposes ports the same
+	// way an agent does -- someone at the shell runs the same command.
+	IdentityTypeSandbox = "sandbox"
+	IdentityTypeApp     = "app"
+	IdentityTypeRunner  = "runner"
 )

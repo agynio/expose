@@ -13,7 +13,9 @@ import (
 	runnerv1 "github.com/agynio/expose/.gen/go/agynio/api/runner/v1"
 	runnersv1 "github.com/agynio/expose/.gen/go/agynio/api/runners/v1"
 	zitimanagementv1 "github.com/agynio/expose/.gen/go/agynio/api/ziti_management/v1"
+	"github.com/agynio/expose/internal/hostname"
 	"github.com/agynio/expose/internal/identitymeta"
+	"github.com/agynio/expose/internal/naming"
 	"github.com/agynio/expose/internal/store"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -49,7 +51,7 @@ func (m *mockStore) GetExposure(ctx context.Context, id uuid.UUID) (store.Exposu
 
 func (m *mockStore) GetExposureByWorkloadAndPort(ctx context.Context, workloadID uuid.UUID, port int32) (store.Exposure, error) {
 	if m.getExposureByWorkloadAndPort == nil {
-		return store.Exposure{}, errors.New("not implemented")
+		return store.Exposure{}, store.ErrExposureNotFound
 	}
 	return m.getExposureByWorkloadAndPort(ctx, workloadID, port)
 }
@@ -176,6 +178,86 @@ func contextWithAgentIdentity(agentID, workloadID uuid.UUID) context.Context {
 	return contextWithIdentity(agentID.String(), string(identityTypeAgent), workloadID.String())
 }
 
+func contextWithSandboxIdentity(sandboxID, workloadID uuid.UUID) context.Context {
+	return contextWithIdentity(sandboxID.String(), string(identityTypeSandbox), workloadID.String())
+}
+
+// stubNames answers with fixed labels, so a test can name an entity without
+// standing up Organizations, Agents, and Identity.
+type stubNames struct {
+	slug  string
+	owner hostname.Owner
+	err   error
+}
+
+func (s stubNames) Resolve(context.Context, naming.Target) (string, hostname.Owner, error) {
+	return s.slug, s.owner, s.err
+}
+
+func sandboxNames(slug, name string) stubNames {
+	return stubNames{slug: slug, owner: hostname.Owner{Kind: hostname.OwnerKindSandbox, SandboxName: name}}
+}
+
+func instanceNames(slug, nickname, suffix string) stubNames {
+	return stubNames{slug: slug, owner: hostname.Owner{
+		Kind:           hostname.OwnerKindAgentInstance,
+		Nickname:       nickname,
+		InstanceSuffix: suffix,
+	}}
+}
+
+func workloadOwnedBy(kind runnersv1.RuntimeOwnerKind, ownerID, orgID uuid.UUID) *mockRunners {
+	return &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
+		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
+			OwnerKind:      kind,
+			OwnerId:        ownerID.String(),
+			OrganizationId: orgID.String(),
+		}}, nil
+	}}
+}
+
+// provisioningStore accepts a create and replays the provisioned record, which
+// is what AddExposure returns.
+func provisioningStore() *mockStore {
+	var created store.Exposure
+	var resources store.ExposureResourceIDs
+	m := &mockStore{
+		createExposure: func(_ context.Context, exposure store.Exposure) error {
+			created = exposure
+			return nil
+		},
+		getExposureByWorkloadAndPort: func(context.Context, uuid.UUID, int32) (store.Exposure, error) {
+			return store.Exposure{}, store.ErrExposureNotFound
+		},
+		updateExposureProvisioned: func(_ context.Context, _ uuid.UUID, r store.ExposureResourceIDs) error {
+			resources = r
+			return nil
+		},
+	}
+	m.getExposure = func(context.Context, uuid.UUID) (store.Exposure, error) {
+		out := created
+		out.OpenZitiServiceID = resources.OpenZitiServiceID
+		out.OpenZitiBindPolicyID = resources.OpenZitiBindPolicyID
+		out.OpenZitiDialPolicyID = resources.OpenZitiDialPolicyID
+		out.Hostname = resources.Hostname
+		out.URL = resources.URL
+		out.Status = store.ExposureStatusActive
+		return out, nil
+	}
+	return m
+}
+
+func provisioningZiti() *mockZitiMgmt {
+	return &mockZitiMgmt{
+		createService: func(context.Context, *zitimanagementv1.CreateServiceRequest) (*zitimanagementv1.CreateServiceResponse, error) {
+			return &zitimanagementv1.CreateServiceResponse{ZitiServiceId: "svc"}, nil
+		},
+		createServicePolicy: func(context.Context, *zitimanagementv1.CreateServicePolicyRequest) (*zitimanagementv1.CreateServicePolicyResponse, error) {
+			return &zitimanagementv1.CreateServicePolicyResponse{ZitiServicePolicyId: "pol"}, nil
+		},
+	}
+}
+
 func assertOutgoingIdentity(t *testing.T, ctx context.Context, identityID, identityType, workloadID string) {
 	t.Helper()
 	md, ok := metadata.FromOutgoingContext(ctx)
@@ -243,7 +325,9 @@ func TestAddExposureHappyPath(t *testing.T) {
 		return store.Exposure{
 			ID:                   created.ID,
 			WorkloadID:           workloadID,
-			AgentID:              agentID,
+			OwnerKind:            store.OwnerKindAgentInstance,
+			OwnerID:              agentID,
+			Hostname:             provisioned.Hostname,
 			Port:                 created.Port,
 			OpenZitiServiceID:    provisioned.OpenZitiServiceID,
 			OpenZitiBindPolicyID: provisioned.OpenZitiBindPolicyID,
@@ -280,12 +364,13 @@ func TestAddExposureHappyPath(t *testing.T) {
 		}
 		assertOutgoingIdentity(t, ctx, agentID.String(), string(identityTypeAgent), workloadID.String())
 		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
-			AgentId:        agentID.String(),
+			OwnerKind:      runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE,
+			OwnerId:        agentID.String(),
 			OrganizationId: orgID.String(),
 		}}, nil
 	}
 
-	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz())
+	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz(), stubNames{})
 	resp, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 8080})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -372,12 +457,13 @@ func TestAddExposureRejectsMissingServiceID(t *testing.T) {
 	agentID := uuid.New()
 	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
-			AgentId:        agentID.String(),
+			OwnerKind:      runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE,
+			OwnerId:        agentID.String(),
 			OrganizationId: uuid.New().String(),
 		}}, nil
 	}}
 
-	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz())
+	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz(), stubNames{})
 	_, err := svc.AddExposure(contextWithAgentIdentity(agentID, workloadID), &exposev1.AddExposureRequest{Port: 8080})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected internal error, got %v", err)
@@ -430,12 +516,13 @@ func TestAddExposureRejectsMissingPolicyID(t *testing.T) {
 	agentID := uuid.New()
 	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
-			AgentId:        agentID.String(),
+			OwnerKind:      runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE,
+			OwnerId:        agentID.String(),
 			OrganizationId: uuid.New().String(),
 		}}, nil
 	}}
 
-	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz())
+	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz(), stubNames{})
 	_, err := svc.AddExposure(contextWithAgentIdentity(agentID, workloadID), &exposev1.AddExposureRequest{Port: 8080})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected internal error, got %v", err)
@@ -492,12 +579,13 @@ func TestAddExposureRejectsIncompleteProvisionedResources(t *testing.T) {
 	agentID := uuid.New()
 	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
-			AgentId:        agentID.String(),
+			OwnerKind:      runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE,
+			OwnerId:        agentID.String(),
 			OrganizationId: uuid.New().String(),
 		}}, nil
 	}}
 
-	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz())
+	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz(), stubNames{})
 	_, err := svc.AddExposure(contextWithAgentIdentity(agentID, workloadID), &exposev1.AddExposureRequest{Port: 8080})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected internal error, got %v", err)
@@ -511,7 +599,7 @@ func TestAddExposureInvalidPort(t *testing.T) {
 	workloadID := uuid.New()
 	agentID := uuid.New()
 	ctx := contextWithAgentIdentity(agentID, workloadID)
-	svc := New(&mockStore{}, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz())
+	svc := New(&mockStore{}, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz(), stubNames{})
 	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 70000})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected invalid argument, got %v", err)
@@ -530,11 +618,12 @@ func TestAddExposureDuplicate(t *testing.T) {
 	ctx := contextWithAgentIdentity(agentID, workloadID)
 	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
-			AgentId:        agentID.String(),
+			OwnerKind:      runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE,
+			OwnerId:        agentID.String(),
 			OrganizationId: orgID.String(),
 		}}, nil
 	}}
-	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz(), stubNames{})
 	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 8080})
 	if status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("expected already exists, got %v", err)
@@ -550,7 +639,7 @@ func TestAddExposureExplicitRequiresClusterAdmin(t *testing.T) {
 		return fmt.Errorf("unexpected create call")
 	}}
 
-	svc := New(storeMock, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz())
+	svc := New(storeMock, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz(), stubNames{})
 	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{
 		WorkloadId: workloadID.String(),
 		AgentId:    agentID.String(),
@@ -582,7 +671,9 @@ func TestAddExposureExplicitClusterAdmin(t *testing.T) {
 		return store.Exposure{
 			ID:                   id,
 			WorkloadID:           workloadID,
-			AgentID:              agentID,
+			OwnerKind:            store.OwnerKindAgentInstance,
+			OwnerID:              agentID,
+			Hostname:             provisioned.Hostname,
 			Port:                 8080,
 			OpenZitiServiceID:    provisioned.OpenZitiServiceID,
 			OpenZitiBindPolicyID: provisioned.OpenZitiBindPolicyID,
@@ -619,17 +710,24 @@ func TestAddExposureExplicitClusterAdmin(t *testing.T) {
 		return &authorizationv1.CheckResponse{Allowed: true}, nil
 	}}
 
-	svc := New(storeMock, zitiMock, &mockRunners{}, authz)
+	runnersMock := workloadOwnedBy(runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE, agentID, uuid.New())
+	storeMock.getExposureByWorkloadAndPort = func(context.Context, uuid.UUID, int32) (store.Exposure, error) {
+		return store.Exposure{}, store.ErrExposureNotFound
+	}
+
+	svc := New(storeMock, zitiMock, runnersMock, authz, stubNames{})
 	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{
 		WorkloadId: workloadID.String(),
-		AgentId:    agentID.String(),
 		Port:       8080,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if created.AgentID != agentID {
-		t.Fatalf("expected agent id %s, got %s", agentID, created.AgentID)
+	if created.OwnerID != agentID {
+		t.Fatalf("expected owner id %s, got %s", agentID, created.OwnerID)
+	}
+	if created.OwnerKind != store.OwnerKindAgentInstance {
+		t.Fatalf("expected agent-instance owner, got %v", created.OwnerKind)
 	}
 }
 
@@ -641,14 +739,9 @@ func TestAddExposureAgentMismatch(t *testing.T) {
 		return fmt.Errorf("unexpected create call")
 	}}
 
-	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
-		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
-			AgentId:        uuid.New().String(),
-			OrganizationId: uuid.New().String(),
-		}}, nil
-	}}
+	runnersMock := workloadOwnedBy(runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE, uuid.New(), uuid.New())
 
-	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz(), stubNames{})
 	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 8080})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected permission denied, got %v", err)
@@ -671,7 +764,7 @@ func TestAddExposureWorkloadNotFound(t *testing.T) {
 	agentID := uuid.New()
 	ctx := contextWithAgentIdentity(agentID, workloadID)
 
-	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz(), stubNames{})
 	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 8080})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("expected failed precondition, got %v", err)
@@ -694,7 +787,7 @@ func TestAddExposureWorkloadAuthFailure(t *testing.T) {
 	agentID := uuid.New()
 	ctx := contextWithAgentIdentity(agentID, workloadID)
 
-	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz(), stubNames{})
 	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 8080})
 	if status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("expected unauthenticated, got %v", err)
@@ -716,7 +809,7 @@ func TestAddExposureRejectsMissingIdentity(t *testing.T) {
 		},
 	}
 
-	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz(), stubNames{})
 	_, err := svc.AddExposure(context.Background(), &exposev1.AddExposureRequest{Port: 8080})
 	if status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("expected unauthenticated, got %v", err)
@@ -741,7 +834,7 @@ func TestAddExposureDuplicateIncomingIdentityInjectedOnce(t *testing.T) {
 		},
 	}
 
-	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz(), stubNames{})
 	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 8080})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("expected failed precondition, got %v", err)
@@ -791,14 +884,15 @@ func TestAddExposureBindPolicyCleanupSuccess(t *testing.T) {
 	runnersMock := &mockRunners{
 		getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 			return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
-				AgentId:        agentID.String(),
+				OwnerKind:      runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE,
+				OwnerId:        agentID.String(),
 				OrganizationId: uuid.New().String(),
 			}}, nil
 		},
 	}
 	ctx := contextWithAgentIdentity(agentID, workloadID)
 
-	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz())
+	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz(), stubNames{})
 	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 8080})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected internal error, got %v", err)
@@ -852,14 +946,15 @@ func TestAddExposureBindPolicyCleanupFail(t *testing.T) {
 	runnersMock := &mockRunners{
 		getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 			return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
-				AgentId:        agentID.String(),
+				OwnerKind:      runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE,
+				OwnerId:        agentID.String(),
 				OrganizationId: uuid.New().String(),
 			}}, nil
 		},
 	}
 	ctx := contextWithAgentIdentity(agentID, workloadID)
 
-	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz())
+	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz(), stubNames{})
 	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{Port: 8080})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected internal error, got %v", err)
@@ -876,7 +971,7 @@ func TestRemoveExposureInvalidPort(t *testing.T) {
 	workloadID := uuid.New()
 	agentID := uuid.New()
 	ctx := contextWithAgentIdentity(agentID, workloadID)
-	svc := New(&mockStore{}, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz())
+	svc := New(&mockStore{}, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz(), stubNames{})
 	_, err := svc.RemoveExposure(ctx, &exposev1.RemoveExposureRequest{
 		WorkloadId: workloadID.String(),
 		Port:       0,
@@ -899,11 +994,12 @@ func TestRemoveExposureNotFound(t *testing.T) {
 
 	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
-			AgentId:        agentID.String(),
+			OwnerKind:      runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE,
+			OwnerId:        agentID.String(),
 			OrganizationId: orgID.String(),
 		}}, nil
 	}}
-	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz(), stubNames{})
 	_, err := svc.RemoveExposure(ctx, &exposev1.RemoveExposureRequest{
 		WorkloadId: workloadID.String(),
 		Port:       8080,
@@ -960,11 +1056,12 @@ func TestRemoveExposureSuccess(t *testing.T) {
 	ctx := contextWithAgentIdentity(agentID, exposure.WorkloadID)
 	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
-			AgentId:        agentID.String(),
+			OwnerKind:      runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE,
+			OwnerId:        agentID.String(),
 			OrganizationId: orgID.String(),
 		}}, nil
 	}}
-	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz())
+	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz(), stubNames{})
 	_, err := svc.RemoveExposure(ctx, &exposev1.RemoveExposureRequest{
 		WorkloadId: exposure.WorkloadID.String(),
 		Port:       exposure.Port,
@@ -1026,7 +1123,8 @@ func TestRemoveExposureOrgOwner(t *testing.T) {
 	ctx := contextWithIdentity(userID, string(identityTypeUser), "")
 	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
-			AgentId:        agentID.String(),
+			OwnerKind:      runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE,
+			OwnerId:        agentID.String(),
 			OrganizationId: orgID.String(),
 		}}, nil
 	}}
@@ -1043,7 +1141,7 @@ func TestRemoveExposureOrgOwner(t *testing.T) {
 		return &authorizationv1.CheckResponse{Allowed: true}, nil
 	}}
 
-	svc := New(storeMock, zitiMock, runnersMock, authz)
+	svc := New(storeMock, zitiMock, runnersMock, authz, stubNames{})
 	_, err := svc.RemoveExposure(ctx, &exposev1.RemoveExposureRequest{
 		WorkloadId: exposure.WorkloadID.String(),
 		Port:       exposure.Port,
@@ -1088,11 +1186,12 @@ func TestRemoveExposureDeleteFailure(t *testing.T) {
 	ctx := contextWithAgentIdentity(agentID, exposure.WorkloadID)
 	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
-			AgentId:        agentID.String(),
+			OwnerKind:      runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE,
+			OwnerId:        agentID.String(),
 			OrganizationId: orgID.String(),
 		}}, nil
 	}}
-	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz())
+	svc := New(storeMock, zitiMock, runnersMock, defaultAuthz(), stubNames{})
 	_, err := svc.RemoveExposure(ctx, &exposev1.RemoveExposureRequest{
 		WorkloadId: exposure.WorkloadID.String(),
 		Port:       exposure.Port,
@@ -1115,11 +1214,13 @@ func TestListExposuresSuccess(t *testing.T) {
 				Exposures: []store.Exposure{{
 					ID:                   workloadID,
 					WorkloadID:           workloadID,
-					AgentID:              uuid.New(),
+					OwnerKind:            store.OwnerKindAgentInstance,
+					OwnerID:              uuid.New(),
 					Port:                 8080,
 					OpenZitiServiceID:    "svc-id",
 					OpenZitiBindPolicyID: "bind-id",
 					OpenZitiDialPolicyID: "dial-id",
+					Hostname:             "exposed.agyn",
 					URL:                  "http://exposed.agyn:8080",
 					Status:               store.ExposureStatusActive,
 					CreatedAt:            time.Now(),
@@ -1133,12 +1234,13 @@ func TestListExposuresSuccess(t *testing.T) {
 	ctx := contextWithAgentIdentity(agentID, workloadID)
 	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
-			AgentId:        agentID.String(),
+			OwnerKind:      runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE,
+			OwnerId:        agentID.String(),
 			OrganizationId: orgID.String(),
 		}}, nil
 	}}
 
-	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz(), stubNames{})
 	resp, err := svc.ListExposures(ctx, &exposev1.ListExposuresRequest{WorkloadId: workloadID.String()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1165,12 +1267,7 @@ func TestListExposuresOrgMember(t *testing.T) {
 	}
 	userID := "user-id"
 	ctx := contextWithIdentity(userID, string(identityTypeUser), "")
-	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
-		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
-			AgentId:        uuid.New().String(),
-			OrganizationId: orgID.String(),
-		}}, nil
-	}}
+	runnersMock := workloadOwnedBy(runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE, uuid.New(), orgID)
 	authz := &mockAuthz{check: func(_ context.Context, req *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
 		if req.GetTupleKey().GetUser() != identityUserPrefix+userID {
 			return nil, fmt.Errorf("unexpected user")
@@ -1184,7 +1281,7 @@ func TestListExposuresOrgMember(t *testing.T) {
 		return &authorizationv1.CheckResponse{Allowed: true}, nil
 	}}
 
-	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, authz)
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, authz, stubNames{})
 	_, err := svc.ListExposures(ctx, &exposev1.ListExposuresRequest{WorkloadId: workloadID.String()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1193,7 +1290,7 @@ func TestListExposuresOrgMember(t *testing.T) {
 
 func TestListExposuresInvalidWorkload(t *testing.T) {
 	ctx := contextWithIdentity("user-id", string(identityTypeUser), "")
-	svc := New(&mockStore{}, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz())
+	svc := New(&mockStore{}, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz(), stubNames{})
 	_, err := svc.ListExposures(ctx, &exposev1.ListExposuresRequest{WorkloadId: "not-a-uuid"})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected invalid argument, got %v", err)
@@ -1207,11 +1304,12 @@ func TestListExposuresInvalidPageToken(t *testing.T) {
 	ctx := contextWithAgentIdentity(agentID, workloadID)
 	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
-			AgentId:        agentID.String(),
+			OwnerKind:      runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE,
+			OwnerId:        agentID.String(),
 			OrganizationId: orgID.String(),
 		}}, nil
 	}}
-	svc := New(&mockStore{}, &mockZitiMgmt{}, runnersMock, defaultAuthz())
+	svc := New(&mockStore{}, &mockZitiMgmt{}, runnersMock, defaultAuthz(), stubNames{})
 	_, err := svc.ListExposures(ctx, &exposev1.ListExposuresRequest{
 		WorkloadId: workloadID.String(),
 		PageToken:  "invalid",
@@ -1233,11 +1331,12 @@ func TestListExposuresStoreError(t *testing.T) {
 	ctx := contextWithAgentIdentity(agentID, workloadID)
 	runnersMock := &mockRunners{getWorkload: func(context.Context, *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 		return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{
-			AgentId:        agentID.String(),
+			OwnerKind:      runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE,
+			OwnerId:        agentID.String(),
 			OrganizationId: orgID.String(),
 		}}, nil
 	}}
-	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz())
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz(), stubNames{})
 	_, err := svc.ListExposures(ctx, &exposev1.ListExposuresRequest{WorkloadId: workloadID.String()})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected internal error, got %v", err)

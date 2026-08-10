@@ -32,13 +32,38 @@ func toProtoExposure(exposure store.Exposure) *exposev1.Exposure {
 			UpdatedAt: timestamppb.New(exposure.UpdatedAt),
 		},
 		WorkloadId:           exposure.WorkloadID.String(),
-		AgentId:              exposure.AgentID.String(),
+		AgentId:              nullUUIDString(exposure.AgentID),
+		OwnerKind:            toProtoOwnerKind(exposure.OwnerKind),
+		OwnerId:              exposure.OwnerID.String(),
+		OrganizationId:       nullUUIDString(exposure.OrganizationID),
 		Port:                 exposure.Port,
 		OpenzitiServiceId:    exposure.OpenZitiServiceID,
 		OpenzitiBindPolicyId: exposure.OpenZitiBindPolicyID,
 		OpenzitiDialPolicyId: exposure.OpenZitiDialPolicyID,
+		Hostname:             exposure.Hostname,
 		Url:                  exposure.URL,
 		Status:               toProtoExposureStatus(exposure.Status),
+	}
+}
+
+// nullUUIDString renders an unset id as the empty string. A sandbox-owned
+// exposure has no agent class, and a row migrated from the agent-shaped schema
+// has no organization until reconciliation fills it in.
+func nullUUIDString(id uuid.NullUUID) string {
+	if !id.Valid {
+		return ""
+	}
+	return id.UUID.String()
+}
+
+func toProtoOwnerKind(kind store.OwnerKind) exposev1.ExposureOwnerKind {
+	switch kind {
+	case store.OwnerKindAgentInstance:
+		return exposev1.ExposureOwnerKind_EXPOSURE_OWNER_KIND_AGENT_INSTANCE
+	case store.OwnerKindSandbox:
+		return exposev1.ExposureOwnerKind_EXPOSURE_OWNER_KIND_SANDBOX
+	default:
+		return exposev1.ExposureOwnerKind_EXPOSURE_OWNER_KIND_UNSPECIFIED
 	}
 }
 
@@ -46,6 +71,7 @@ func exposureResourcesComplete(exposure store.Exposure) bool {
 	return strings.TrimSpace(exposure.OpenZitiServiceID) != "" &&
 		strings.TrimSpace(exposure.OpenZitiBindPolicyID) != "" &&
 		strings.TrimSpace(exposure.OpenZitiDialPolicyID) != "" &&
+		strings.TrimSpace(exposure.Hostname) != "" &&
 		strings.TrimSpace(exposure.URL) != ""
 }
 

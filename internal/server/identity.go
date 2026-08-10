@@ -28,15 +28,20 @@ const (
 	identityTypeUser          identityType = identitymeta.IdentityTypeUser
 	identityTypeAgent         identityType = identitymeta.IdentityTypeAgent
 	identityTypeAgentInstance identityType = identitymeta.IdentityTypeAgentInstance
+	identityTypeSandbox       identityType = identitymeta.IdentityTypeSandbox
 	identityTypeApp           identityType = identitymeta.IdentityTypeApp
 	identityTypeRunner        identityType = identitymeta.IdentityTypeRunner
 )
 
-// isAgentWorkload reports whether the identity belongs to a running agent.
-// Workloads authenticate as their instance; identities minted before instances
-// existed still present the class type, and both own exposures.
-func (t identityType) isAgentWorkload() bool {
-	return t == identityTypeAgent || t == identityTypeAgentInstance
+// isWorkload reports whether the identity belongs to a running workload, which
+// is the only thing that exposes a port on its own behalf.
+//
+// Agent workloads authenticate as their instance; identities minted before
+// instances existed still present the class type. A sandbox authenticates as
+// its sandbox. All three own exposures, and the self-service check does not
+// distinguish them -- the caller is the workload either way.
+func (t identityType) isWorkload() bool {
+	return t == identityTypeAgent || t == identityTypeAgentInstance || t == identityTypeSandbox
 }
 
 type resolvedIdentity struct {
@@ -90,7 +95,7 @@ func resolveWorkloadIDFromRequest(caller exposureCaller, workloadID string) (str
 	if trimmed != "" {
 		return trimmed, nil
 	}
-	if !caller.identity.identityType.isAgentWorkload() {
+	if !caller.identity.identityType.isWorkload() {
 		return "", status.Error(codes.InvalidArgument, "workload id is required")
 	}
 	callerWorkloadID := strings.TrimSpace(caller.identity.workloadID)
@@ -165,6 +170,8 @@ func parseIdentityType(value string) (identityType, error) {
 		return identityTypeAgent, nil
 	case string(identityTypeAgentInstance):
 		return identityTypeAgentInstance, nil
+	case string(identityTypeSandbox):
+		return identityTypeSandbox, nil
 	case string(identityTypeApp):
 		return identityTypeApp, nil
 	case string(identityTypeRunner):

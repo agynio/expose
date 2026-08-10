@@ -3,6 +3,7 @@ package reconciler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"sort"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	notificationsv1 "github.com/agynio/expose/.gen/go/agynio/api/notifications/v1"
 	runnersv1 "github.com/agynio/expose/.gen/go/agynio/api/runners/v1"
 	zitimanagementv1 "github.com/agynio/expose/.gen/go/agynio/api/ziti_management/v1"
+	"github.com/agynio/expose/internal/hostname"
+	"github.com/agynio/expose/internal/naming"
 	"github.com/agynio/expose/internal/store"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -24,8 +27,15 @@ const (
 
 var notificationRoomPollInterval = notificationRetryDelay
 
+// NameResolver reads the labels an exposure address is built from.
+type NameResolver interface {
+	Resolve(ctx context.Context, target naming.Target) (string, hostname.Owner, error)
+}
+
 type ReconcilerStore interface {
 	ListExposuresByStatus(ctx context.Context, status store.ExposureStatus) ([]store.Exposure, error)
+	UpdateExposureAddress(ctx context.Context, id uuid.UUID, host string, url string) error
+	UpdateExposureOwner(ctx context.Context, id uuid.UUID, owner store.ExposureOwner) error
 	ListExposuresByWorkloadAll(ctx context.Context, workloadID uuid.UUID) ([]store.Exposure, error)
 	ListAllActiveWorkloadIDs(ctx context.Context) ([]uuid.UUID, error)
 	UpdateExposureStatus(ctx context.Context, id uuid.UUID, status store.ExposureStatus) error
@@ -37,6 +47,7 @@ type Reconciler struct {
 	zitiMgmt      zitimanagementv1.ZitiManagementServiceClient
 	runners       runnersv1.RunnersServiceClient
 	notifications notificationsv1.NotificationsServiceClient
+	names         NameResolver
 	interval      time.Duration
 }
 
@@ -45,6 +56,7 @@ func New(
 	zitiMgmt zitimanagementv1.ZitiManagementServiceClient,
 	runners runnersv1.RunnersServiceClient,
 	notifications notificationsv1.NotificationsServiceClient,
+	names NameResolver,
 	interval time.Duration,
 ) *Reconciler {
 	return &Reconciler{
@@ -52,6 +64,7 @@ func New(
 		zitiMgmt:      zitiMgmt,
 		runners:       runners,
 		notifications: notifications,
+		names:         names,
 		interval:      interval,
 	}
 }
@@ -214,15 +227,18 @@ func (r *Reconciler) activeWorkloadRooms(ctx context.Context) ([]string, error) 
 }
 
 func (r *Reconciler) reconcile(ctx context.Context) {
-	r.reconcileOrphaned(ctx)
+	r.reconcileActive(ctx)
 	r.reconcileFailed(ctx)
 	r.reconcileRemoving(ctx)
 }
 
-func (r *Reconciler) reconcileOrphaned(ctx context.Context) {
+// reconcileActive walks every live exposure once, for two jobs that need the
+// same workload record: retiring exposures whose workload is gone, and carrying
+// a rename through to those whose workload is still there.
+func (r *Reconciler) reconcileActive(ctx context.Context) {
 	exposures, err := r.store.ListExposuresByStatus(ctx, store.ExposureStatusActive)
 	if err != nil {
-		log.Printf("reconcile orphaned: list active exposures: %v", err)
+		log.Printf("reconcile active: list active exposures: %v", err)
 		return
 	}
 	for _, exposure := range exposures {
@@ -230,17 +246,135 @@ func (r *Reconciler) reconcileOrphaned(ctx context.Context) {
 		resp, err := r.runners.GetWorkload(workloadCtx, &runnersv1.GetWorkloadRequest{Id: exposure.WorkloadID.String()})
 		if err == nil {
 			if !isTerminalWorkload(resp.GetWorkload()) {
+				r.reconcileAddress(ctx, exposure, resp.GetWorkload())
 				continue
 			}
 		} else if !isNotFound(err) {
-			log.Printf("reconcile orphaned: get workload %s: %v", exposure.WorkloadID, err)
+			log.Printf("reconcile active: get workload %s: %v", exposure.WorkloadID, err)
 			continue
 		}
 		if err := r.store.UpdateExposureStatus(ctx, exposure.ID, store.ExposureStatusRemoving); err != nil {
-			log.Printf("reconcile orphaned: update exposure %s: %v", exposure.ID, err)
+			log.Printf("reconcile active: update exposure %s: %v", exposure.ID, err)
 			continue
 		}
 		r.removeExposure(ctx, exposure)
+	}
+}
+
+// reconcileAddress re-derives an exposure's address and rewrites its
+// intercept.v1 config when it has drifted. This is what carries an
+// organization, sandbox, or instance rename through to a live exposure.
+//
+// Renames are picked up here rather than by an event: this pass already re-reads
+// every live exposure, and an address stale for one interval is a cosmetic delay
+// rather than a fault. The address a caller already holds keeps working until
+// the rewrite lands, then stops.
+func (r *Reconciler) reconcileAddress(ctx context.Context, exposure store.Exposure, workload *runnersv1.Workload) {
+	if r.names == nil {
+		return
+	}
+	// Rows migrated from the agent-shaped schema could not know their
+	// organization, so the workload record is the source for both.
+	if owner, ok := ownerFromWorkload(workload); ok && !ownerMatches(exposure, owner) {
+		if err := r.store.UpdateExposureOwner(ctx, exposure.ID, owner); err != nil {
+			log.Printf("reconcile address: update owner for exposure %s: %v", exposure.ID, err)
+			return
+		}
+		exposure.OwnerKind = owner.OwnerKind
+		exposure.OwnerID = owner.OwnerID
+		exposure.AgentID = owner.AgentID
+		exposure.OrganizationID = owner.OrganizationID
+	}
+
+	desired, err := r.deriveHostname(ctx, exposure)
+	if err != nil {
+		log.Printf("reconcile address: derive hostname for exposure %s: %v", exposure.ID, err)
+		return
+	}
+	if desired == exposure.Hostname {
+		return
+	}
+
+	if _, err := r.zitiMgmt.UpdateService(ctx, &zitimanagementv1.UpdateServiceRequest{
+		ZitiServiceId: exposure.OpenZitiServiceID,
+		InterceptV1Config: &zitimanagementv1.InterceptV1Config{
+			Protocols:  []string{"tcp"},
+			Addresses:  []string{desired},
+			PortRanges: []*zitimanagementv1.PortRange{{Low: exposure.Port, High: exposure.Port}},
+		},
+	}); err != nil {
+		log.Printf("reconcile address: rewrite intercept for exposure %s: %v", exposure.ID, err)
+		return
+	}
+	if err := r.store.UpdateExposureAddress(ctx, exposure.ID, desired, fmt.Sprintf("http://%s:%d", desired, exposure.Port)); err != nil {
+		log.Printf("reconcile address: store address for exposure %s: %v", exposure.ID, err)
+		return
+	}
+	log.Printf("exposure %s moved from %s to %s", exposure.ID, exposure.Hostname, desired)
+}
+
+func (r *Reconciler) deriveHostname(ctx context.Context, exposure store.Exposure) (string, error) {
+	if !exposure.OrganizationID.Valid {
+		return hostname.Fallback(exposure.ID), nil
+	}
+	slug, owner, err := r.names.Resolve(ctx, naming.Target{
+		OrganizationID: exposure.OrganizationID.UUID,
+		OwnerKind:      toHostnameOwnerKind(exposure.OwnerKind),
+		OwnerID:        exposure.OwnerID,
+	})
+	if err != nil {
+		return "", err
+	}
+	return hostname.Derive(exposure.ID, slug, owner), nil
+}
+
+func ownerFromWorkload(workload *runnersv1.Workload) (store.ExposureOwner, bool) {
+	if workload == nil {
+		return store.ExposureOwner{}, false
+	}
+	ownerID, err := uuid.Parse(strings.TrimSpace(workload.GetOwnerId()))
+	if err != nil {
+		return store.ExposureOwner{}, false
+	}
+	orgID, err := uuid.Parse(strings.TrimSpace(workload.GetOrganizationId()))
+	if err != nil {
+		return store.ExposureOwner{}, false
+	}
+	var kind store.OwnerKind
+	switch workload.GetOwnerKind() {
+	case runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE:
+		kind = store.OwnerKindAgentInstance
+	case runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_SANDBOX:
+		kind = store.OwnerKindSandbox
+	default:
+		return store.ExposureOwner{}, false
+	}
+	owner := store.ExposureOwner{
+		OwnerKind:      kind,
+		OwnerID:        ownerID,
+		OrganizationID: uuid.NullUUID{UUID: orgID, Valid: true},
+	}
+	if classID, err := uuid.Parse(strings.TrimSpace(workload.GetAgentClassId())); err == nil {
+		owner.AgentID = uuid.NullUUID{UUID: classID, Valid: true}
+	}
+	return owner, true
+}
+
+func ownerMatches(exposure store.Exposure, owner store.ExposureOwner) bool {
+	return exposure.OwnerKind == owner.OwnerKind &&
+		exposure.OwnerID == owner.OwnerID &&
+		exposure.AgentID == owner.AgentID &&
+		exposure.OrganizationID == owner.OrganizationID
+}
+
+func toHostnameOwnerKind(kind store.OwnerKind) hostname.OwnerKind {
+	switch kind {
+	case store.OwnerKindAgentInstance:
+		return hostname.OwnerKindAgentInstance
+	case store.OwnerKindSandbox:
+		return hostname.OwnerKindSandbox
+	default:
+		return hostname.OwnerKindUnspecified
 	}
 }
 

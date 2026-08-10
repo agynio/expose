@@ -49,7 +49,8 @@ func TestExposureActiveResourcesConstraint(t *testing.T) {
 	if err := st.CreateExposure(ctx, Exposure{
 		ID:         exposureID,
 		WorkloadID: uuid.New(),
-		AgentID:    uuid.New(),
+		OwnerKind:  OwnerKindAgentInstance,
+		OwnerID:    uuid.New(),
 		Port:       8080,
 		Status:     ExposureStatusProvisioning,
 	}); err != nil {

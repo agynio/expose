@@ -66,7 +66,8 @@ func TestToProtoExposurePanicsForActiveWithoutResources(t *testing.T) {
 	exposure := store.Exposure{
 		ID:         uuid.New(),
 		WorkloadID: uuid.New(),
-		AgentID:    uuid.New(),
+		OwnerKind:  store.OwnerKindAgentInstance,
+		OwnerID:    uuid.New(),
 		Port:       8080,
 		Status:     store.ExposureStatusActive,
 	}

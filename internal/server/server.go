@@ -11,6 +11,8 @@ import (
 	exposev1 "github.com/agynio/expose/.gen/go/agynio/api/expose/v1"
 	runnersv1 "github.com/agynio/expose/.gen/go/agynio/api/runners/v1"
 	zitimanagementv1 "github.com/agynio/expose/.gen/go/agynio/api/ziti_management/v1"
+	"github.com/agynio/expose/internal/hostname"
+	"github.com/agynio/expose/internal/naming"
 	"github.com/agynio/expose/internal/store"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -28,19 +30,72 @@ type ExposureStore interface {
 	DeleteExposure(ctx context.Context, id uuid.UUID) error
 }
 
+// NameResolver reads the labels an exposure address is built from. It is an
+// interface so tests can name an entity without standing up three services.
+type NameResolver interface {
+	Resolve(ctx context.Context, target naming.Target) (string, hostname.Owner, error)
+}
+
 type Server struct {
 	exposev1.UnimplementedExposeServiceServer
 	store    ExposureStore
 	zitiMgmt zitimanagementv1.ZitiManagementServiceClient
 	runners  runnersv1.RunnersServiceClient
 	authz    authorizationv1.AuthorizationServiceClient
+	names    NameResolver
 }
 
-func New(store ExposureStore, zitiMgmt zitimanagementv1.ZitiManagementServiceClient, runners runnersv1.RunnersServiceClient, authz authorizationv1.AuthorizationServiceClient) *Server {
+func New(
+	store ExposureStore,
+	zitiMgmt zitimanagementv1.ZitiManagementServiceClient,
+	runners runnersv1.RunnersServiceClient,
+	authz authorizationv1.AuthorizationServiceClient,
+	names NameResolver,
+) *Server {
 	if authz == nil {
 		panic("authorization client is required")
 	}
-	return &Server{store: store, zitiMgmt: zitiMgmt, runners: runners, authz: authz}
+	if names == nil {
+		panic("name resolver is required")
+	}
+	return &Server{store: store, zitiMgmt: zitiMgmt, runners: runners, authz: authz, names: names}
+}
+
+// deriveHostname resolves the address an exposure is reachable at.
+//
+// A lookup that fails is not fatal. The opaque fallback always works, and
+// reconciliation re-derives every live exposure's address on its next pass — so
+// a transient outage in Organizations, Agents, or Identity costs a temporarily
+// ugly URL rather than a failed `expose add`.
+func (s *Server) deriveHostname(ctx context.Context, exposureID uuid.UUID, owner store.ExposureOwner) string {
+	if !owner.OrganizationID.Valid {
+		return hostname.Fallback(exposureID)
+	}
+	slug, resolved, err := s.names.Resolve(ctx, naming.Target{
+		OrganizationID: owner.OrganizationID.UUID,
+		OwnerKind:      toHostnameOwnerKind(owner.OwnerKind),
+		OwnerID:        owner.OwnerID,
+	})
+	if err != nil {
+		log.Printf("derive hostname for exposure %s: %v; falling back to the opaque address", exposureID, err)
+		return hostname.Fallback(exposureID)
+	}
+	return hostname.Derive(exposureID, slug, resolved)
+}
+
+func exposureURL(host string, port int32) string {
+	return fmt.Sprintf("http://%s:%d", host, port)
+}
+
+func toHostnameOwnerKind(kind store.OwnerKind) hostname.OwnerKind {
+	switch kind {
+	case store.OwnerKindAgentInstance:
+		return hostname.OwnerKindAgentInstance
+	case store.OwnerKindSandbox:
+		return hostname.OwnerKindSandbox
+	default:
+		return hostname.OwnerKindUnspecified
+	}
 }
 
 func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureRequest) (*exposev1.AddExposureResponse, error) {
@@ -50,7 +105,6 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 	}
 	explicitWorkloadID := strings.TrimSpace(req.GetWorkloadId())
 	var workloadID uuid.UUID
-	var agentID uuid.UUID
 	if explicitWorkloadID != "" {
 		if err := requireClusterAdmin(ctx, s.authz, caller.identity.identityID); err != nil {
 			return nil, err
@@ -59,14 +113,9 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 		if err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
-		parsedAgentID, err := parseUUID(req.GetAgentId(), "agent_id")
-		if err != nil {
-			return nil, status.Error(codes.InvalidArgument, err.Error())
-		}
 		workloadID = parsedWorkloadID
-		agentID = parsedAgentID
 	} else {
-		if !caller.identity.identityType.isAgentWorkload() {
+		if !caller.identity.identityType.isWorkload() {
 			return nil, status.Error(codes.PermissionDenied, "permission denied")
 		}
 		resolvedWorkloadID, err := resolveWorkloadIDFromRequest(caller, "")
@@ -83,41 +132,58 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 	if err := validatePort(port); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	workload, err := s.fetchWorkload(ctx, caller, workloadID)
+	if err != nil {
+		return nil, err
+	}
+	owner, err := workloadOwner(workload)
+	if err != nil {
+		return nil, err
+	}
 	if explicitWorkloadID == "" {
-		workload, err := s.fetchWorkload(ctx, caller, workloadID)
-		if err != nil {
+		// The caller arrived with an x-workload-id the Gateway injected from a
+		// verified OpenZiti connection, so the caller is the workload. Identity
+		// equality against the workload's owner is the whole check, and it reads
+		// the same for an agent instance and for a sandbox.
+		if err := requireWorkloadSelf(caller, owner.OwnerID); err != nil {
 			return nil, err
 		}
-		agentIDValue, err := workloadAgentID(workload)
-		if err != nil {
-			return nil, err
-		}
-		if err := ensureIDMatch(agentIDValue.String(), req.GetAgentId(), "agent"); err != nil {
-			return nil, err
-		}
-		if err := requireAgentSelf(caller, agentIDValue); err != nil {
-			return nil, err
-		}
-		agentID = agentIDValue
+	}
+
+	// Every exposure on one entity shares a hostname and differs only in port,
+	// so a second record for an already-exposed port would be a duplicate
+	// OpenZiti intercept rather than a second address.
+	existing, err := s.store.GetExposureByWorkloadAndPort(ctx, workloadID, port)
+	switch {
+	case err == nil:
+		return &exposev1.AddExposureResponse{Exposure: toProtoExposure(existing)}, nil
+	case !errors.Is(err, store.ErrExposureNotFound):
+		return nil, toStatusError(err)
 	}
 
 	exposureID := uuid.New()
 	exposure := store.Exposure{
-		ID:         exposureID,
-		WorkloadID: workloadID,
-		AgentID:    agentID,
-		Port:       port,
-		Status:     store.ExposureStatusProvisioning,
+		ID:             exposureID,
+		WorkloadID:     workloadID,
+		OwnerKind:      owner.OwnerKind,
+		OwnerID:        owner.OwnerID,
+		AgentID:        owner.AgentID,
+		OrganizationID: owner.OrganizationID,
+		Port:           port,
+		Status:         store.ExposureStatusProvisioning,
 	}
 	if err := s.store.CreateExposure(ctx, exposure); err != nil {
 		return nil, toStatusError(err)
 	}
 
+	// The OpenZiti service name stays exposure-scoped; only the intercept
+	// address is readable. Keeping the two separate is what lets a rename
+	// rewrite the address without touching a policy or an object identity.
 	serviceName := fmt.Sprintf("exposed-%s", exposureID)
-	interceptAddress := fmt.Sprintf("%s.agyn", serviceName)
-	url := fmt.Sprintf("http://%s:%d", interceptAddress, port)
+	interceptAddress := s.deriveHostname(ctx, exposureID, owner)
+	url := exposureURL(interceptAddress, port)
 
-	resources := store.ExposureResourceIDs{URL: url}
+	resources := store.ExposureResourceIDs{Hostname: interceptAddress, URL: url}
 	serviceResp, err := s.zitiMgmt.CreateService(ctx, &zitimanagementv1.CreateServiceRequest{
 		Name:           serviceName,
 		RoleAttributes: []string{"exposed-services"},
@@ -213,20 +279,16 @@ func (s *Server) RemoveExposure(ctx context.Context, req *exposev1.RemoveExposur
 	if err != nil {
 		return nil, err
 	}
-	agentID, err := workloadAgentID(workload)
+	owner, err := workloadOwner(workload)
 	if err != nil {
 		return nil, err
 	}
-	orgID, err := workloadOrganizationID(workload)
-	if err != nil {
-		return nil, err
-	}
-	allowed, err := agentMatchesWorkload(caller, agentID)
+	allowed, err := callerIsWorkload(caller, owner.OwnerID)
 	if err != nil {
 		return nil, err
 	}
 	if !allowed {
-		if err := requireOrgRelation(ctx, s.authz, caller.identity.identityID, orgID.String(), organizationOwnerRelation); err != nil {
+		if err := requireOrgRelation(ctx, s.authz, caller.identity.identityID, owner.OrganizationID.UUID.String(), organizationOwnerRelation); err != nil {
 			return nil, err
 		}
 	}
@@ -265,20 +327,16 @@ func (s *Server) ListExposures(ctx context.Context, req *exposev1.ListExposuresR
 	if err != nil {
 		return nil, err
 	}
-	agentID, err := workloadAgentID(workload)
+	owner, err := workloadOwner(workload)
 	if err != nil {
 		return nil, err
 	}
-	orgID, err := workloadOrganizationID(workload)
-	if err != nil {
-		return nil, err
-	}
-	allowed, err := agentMatchesWorkload(caller, agentID)
+	allowed, err := callerIsWorkload(caller, owner.OwnerID)
 	if err != nil {
 		return nil, err
 	}
 	if !allowed {
-		if err := requireOrgRelation(ctx, s.authz, caller.identity.identityID, orgID.String(), organizationMemberRelation); err != nil {
+		if err := requireOrgRelation(ctx, s.authz, caller.identity.identityID, owner.OrganizationID.UUID.String(), organizationMemberRelation); err != nil {
 			return nil, err
 		}
 	}
@@ -421,19 +479,53 @@ func mapRunnersWorkloadError(err error) error {
 	return err
 }
 
-func workloadAgentID(workload *runnersv1.Workload) (uuid.UUID, error) {
+// workloadOwner reads the entity a workload runs for. This is what an exposure
+// is named after, and what the self-service authorization check compares the
+// caller against.
+func workloadOwner(workload *runnersv1.Workload) (store.ExposureOwner, error) {
 	if workload == nil {
-		return uuid.UUID{}, status.Error(codes.Internal, "workload missing")
+		return store.ExposureOwner{}, status.Error(codes.Internal, "workload missing")
 	}
-	agentID := strings.TrimSpace(workload.GetAgentId())
-	if agentID == "" {
-		return uuid.UUID{}, status.Error(codes.Internal, "workload agent_id missing")
+	ownerID := strings.TrimSpace(workload.GetOwnerId())
+	if ownerID == "" {
+		return store.ExposureOwner{}, status.Error(codes.Internal, "workload owner_id missing")
 	}
-	parsed, err := parseUUID(agentID, "agent_id")
+	parsedOwnerID, err := parseUUID(ownerID, "owner_id")
 	if err != nil {
-		return uuid.UUID{}, status.Errorf(codes.Internal, "workload agent_id invalid: %v", err)
+		return store.ExposureOwner{}, status.Errorf(codes.Internal, "workload owner_id invalid: %v", err)
 	}
-	return parsed, nil
+	ownerKind, err := toStoreOwnerKind(workload.GetOwnerKind())
+	if err != nil {
+		return store.ExposureOwner{}, err
+	}
+	orgID, err := workloadOrganizationID(workload)
+	if err != nil {
+		return store.ExposureOwner{}, err
+	}
+	owner := store.ExposureOwner{
+		OwnerKind:      ownerKind,
+		OwnerID:        parsedOwnerID,
+		OrganizationID: uuid.NullUUID{UUID: orgID, Valid: true},
+	}
+	// The agent class is carried for display and filtering only. A sandbox has
+	// none, which is why it is nullable rather than a zero UUID.
+	if classID := strings.TrimSpace(workload.GetAgentClassId()); classID != "" {
+		if parsed, err := uuid.Parse(classID); err == nil {
+			owner.AgentID = uuid.NullUUID{UUID: parsed, Valid: true}
+		}
+	}
+	return owner, nil
+}
+
+func toStoreOwnerKind(kind runnersv1.RuntimeOwnerKind) (store.OwnerKind, error) {
+	switch kind {
+	case runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE:
+		return store.OwnerKindAgentInstance, nil
+	case runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_SANDBOX:
+		return store.OwnerKindSandbox, nil
+	default:
+		return store.OwnerKindUnspecified, status.Error(codes.Internal, "workload owner_kind missing")
+	}
 }
 
 func workloadOrganizationID(workload *runnersv1.Workload) (uuid.UUID, error) {
@@ -451,24 +543,28 @@ func workloadOrganizationID(workload *runnersv1.Workload) (uuid.UUID, error) {
 	return parsed, nil
 }
 
-func agentMatchesWorkload(caller exposureCaller, agentID uuid.UUID) (bool, error) {
-	if !caller.identity.identityType.isAgentWorkload() {
+// callerIsWorkload reports whether the caller is the workload it is acting on.
+// A workload authenticates as its own owner — an agent instance as the
+// instance, a sandbox as the sandbox — so this is identity equality, not a
+// relation, and it needs no OpenFGA call.
+func callerIsWorkload(caller exposureCaller, ownerID uuid.UUID) (bool, error) {
+	if !caller.identity.identityType.isWorkload() {
 		return false, nil
 	}
 	callerID, err := parseIdentityUUID(caller.identity.identityID)
 	if err != nil {
 		return false, err
 	}
-	return callerID == agentID, nil
+	return callerID == ownerID, nil
 }
 
-func requireAgentSelf(caller exposureCaller, agentID uuid.UUID) error {
-	allowed, err := agentMatchesWorkload(caller, agentID)
+func requireWorkloadSelf(caller exposureCaller, ownerID uuid.UUID) error {
+	allowed, err := callerIsWorkload(caller, ownerID)
 	if err != nil {
 		return err
 	}
 	if !allowed {
-		return status.Error(codes.PermissionDenied, "agent id does not match workload")
+		return status.Error(codes.PermissionDenied, "caller is not the workload")
 	}
 	return nil
 }

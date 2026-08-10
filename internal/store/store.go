@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const exposureColumns = `id, workload_id, agent_id, port, openziti_service_id, openziti_bind_policy_id, openziti_dial_policy_id, url, status, created_at, updated_at`
+const exposureColumns = `id, workload_id, owner_kind, owner_id, agent_id, organization_id, port, openziti_service_id, openziti_bind_policy_id, openziti_dial_policy_id, hostname, url, status, created_at, updated_at`
 
 type Store struct {
 	pool *pgxpool.Pool
@@ -26,11 +26,15 @@ func scanExposure(row pgx.Row) (Exposure, error) {
 	if err := row.Scan(
 		&exposure.ID,
 		&exposure.WorkloadID,
+		&exposure.OwnerKind,
+		&exposure.OwnerID,
 		&exposure.AgentID,
+		&exposure.OrganizationID,
 		&exposure.Port,
 		&exposure.OpenZitiServiceID,
 		&exposure.OpenZitiBindPolicyID,
 		&exposure.OpenZitiDialPolicyID,
+		&exposure.Hostname,
 		&exposure.URL,
 		&exposure.Status,
 		&exposure.CreatedAt,
@@ -46,11 +50,15 @@ func scanExposureFromRows(rows pgx.Rows) (Exposure, error) {
 	if err := rows.Scan(
 		&exposure.ID,
 		&exposure.WorkloadID,
+		&exposure.OwnerKind,
+		&exposure.OwnerID,
 		&exposure.AgentID,
+		&exposure.OrganizationID,
 		&exposure.Port,
 		&exposure.OpenZitiServiceID,
 		&exposure.OpenZitiBindPolicyID,
 		&exposure.OpenZitiDialPolicyID,
+		&exposure.Hostname,
 		&exposure.URL,
 		&exposure.Status,
 		&exposure.CreatedAt,
@@ -78,10 +86,13 @@ func collectExposures(rows pgx.Rows) ([]Exposure, error) {
 
 func (s *Store) CreateExposure(ctx context.Context, exposure Exposure) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO exposures (id, workload_id, agent_id, port, status) VALUES ($1, $2, $3, $4, $5)`,
+		`INSERT INTO exposures (id, workload_id, owner_kind, owner_id, agent_id, organization_id, port, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		exposure.ID,
 		exposure.WorkloadID,
+		exposure.OwnerKind,
+		exposure.OwnerID,
 		exposure.AgentID,
+		exposure.OrganizationID,
 		exposure.Port,
 		exposure.Status,
 	)
@@ -207,11 +218,12 @@ func (s *Store) UpdateExposureProvisioned(ctx context.Context, id uuid.UUID, res
 		return ErrExposureResourcesIncomplete
 	}
 	cmd, err := s.pool.Exec(ctx,
-		`UPDATE exposures SET openziti_service_id = $2, openziti_bind_policy_id = $3, openziti_dial_policy_id = $4, url = $5, status = $6, updated_at = NOW() WHERE id = $1`,
+		`UPDATE exposures SET openziti_service_id = $2, openziti_bind_policy_id = $3, openziti_dial_policy_id = $4, hostname = $5, url = $6, status = $7, updated_at = NOW() WHERE id = $1`,
 		id,
 		resources.OpenZitiServiceID,
 		resources.OpenZitiBindPolicyID,
 		resources.OpenZitiDialPolicyID,
+		resources.Hostname,
 		resources.URL,
 		ExposureStatusActive,
 	)
@@ -237,16 +249,55 @@ func (s *Store) UpdateExposureStatus(ctx context.Context, id uuid.UUID, status E
 
 func (s *Store) UpdateExposureFailed(ctx context.Context, id uuid.UUID, resources ExposureResourceIDs) error {
 	cmd, err := s.pool.Exec(ctx,
-		`UPDATE exposures SET openziti_service_id = $2, openziti_bind_policy_id = $3, openziti_dial_policy_id = $4, url = $5, status = $6, updated_at = NOW() WHERE id = $1`,
+		`UPDATE exposures SET openziti_service_id = $2, openziti_bind_policy_id = $3, openziti_dial_policy_id = $4, hostname = $5, url = $6, status = $7, updated_at = NOW() WHERE id = $1`,
 		id,
 		resources.OpenZitiServiceID,
 		resources.OpenZitiBindPolicyID,
 		resources.OpenZitiDialPolicyID,
+		resources.Hostname,
 		resources.URL,
 		ExposureStatusFailed,
 	)
 	if err != nil {
 		return fmt.Errorf("update exposure failed: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return ErrExposureNotFound
+	}
+	return nil
+}
+
+// UpdateExposureAddress records a re-derived address. Reconciliation calls it
+// after rewriting the service's intercept.v1 config, so the stored hostname and
+// the one OpenZiti serves stay the same string.
+func (s *Store) UpdateExposureAddress(ctx context.Context, id uuid.UUID, host string, url string) error {
+	if host == "" || url == "" {
+		return ErrExposureResourcesIncomplete
+	}
+	cmd, err := s.pool.Exec(ctx, `UPDATE exposures SET hostname = $2, url = $3, updated_at = NOW() WHERE id = $1`, id, host, url)
+	if err != nil {
+		return fmt.Errorf("update exposure address: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return ErrExposureNotFound
+	}
+	return nil
+}
+
+// UpdateExposureOwner refreshes the denormalized owner and organization from the
+// workload record. It is what fills in rows migrated from the agent-shaped
+// schema, which could not know their organization.
+func (s *Store) UpdateExposureOwner(ctx context.Context, id uuid.UUID, owner ExposureOwner) error {
+	cmd, err := s.pool.Exec(ctx,
+		`UPDATE exposures SET owner_kind = $2, owner_id = $3, agent_id = $4, organization_id = $5, updated_at = NOW() WHERE id = $1`,
+		id,
+		owner.OwnerKind,
+		owner.OwnerID,
+		owner.AgentID,
+		owner.OrganizationID,
+	)
+	if err != nil {
+		return fmt.Errorf("update exposure owner: %w", err)
 	}
 	if cmd.RowsAffected() == 0 {
 		return ErrExposureNotFound

@@ -10,13 +10,17 @@ import (
 	"os/signal"
 	"syscall"
 
+	agentsv1 "github.com/agynio/expose/.gen/go/agynio/api/agents/v1"
 	authorizationv1 "github.com/agynio/expose/.gen/go/agynio/api/authorization/v1"
 	exposev1 "github.com/agynio/expose/.gen/go/agynio/api/expose/v1"
+	identityv1 "github.com/agynio/expose/.gen/go/agynio/api/identity/v1"
 	notificationsv1 "github.com/agynio/expose/.gen/go/agynio/api/notifications/v1"
+	organizationsv1 "github.com/agynio/expose/.gen/go/agynio/api/organizations/v1"
 	runnersv1 "github.com/agynio/expose/.gen/go/agynio/api/runners/v1"
 	zitimanagementv1 "github.com/agynio/expose/.gen/go/agynio/api/ziti_management/v1"
 	"github.com/agynio/expose/internal/config"
 	"github.com/agynio/expose/internal/db"
+	"github.com/agynio/expose/internal/naming"
 	"github.com/agynio/expose/internal/reconciler"
 	"github.com/agynio/expose/internal/server"
 	"github.com/agynio/expose/internal/store"
@@ -78,14 +82,37 @@ func run() error {
 	}
 	defer authorizationConn.Close()
 
+	organizationsConn, err := grpc.NewClient(cfg.OrganizationsAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("connect to organizations: %w", err)
+	}
+	defer organizationsConn.Close()
+
+	agentsConn, err := grpc.NewClient(cfg.AgentsAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("connect to agents: %w", err)
+	}
+	defer agentsConn.Close()
+
+	identityConn, err := grpc.NewClient(cfg.IdentityAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("connect to identity: %w", err)
+	}
+	defer identityConn.Close()
+
 	storeClient := store.New(pool)
 	zitiClient := zitimanagementv1.NewZitiManagementServiceClient(zitiConn)
 	runnersClient := runnersv1.NewRunnersServiceClient(runnersConn)
 	notificationsClient := notificationsv1.NewNotificationsServiceClient(notificationsConn)
 	authorizationClient := authorizationv1.NewAuthorizationServiceClient(authorizationConn)
+	nameResolver := naming.NewResolver(
+		organizationsv1.NewOrganizationsServiceClient(organizationsConn),
+		agentsv1.NewAgentsServiceClient(agentsConn),
+		identityv1.NewIdentityServiceClient(identityConn),
+	)
 
 	grpcServer := grpc.NewServer()
-	exposev1.RegisterExposeServiceServer(grpcServer, server.New(storeClient, zitiClient, runnersClient, authorizationClient))
+	exposev1.RegisterExposeServiceServer(grpcServer, server.New(storeClient, zitiClient, runnersClient, authorizationClient, nameResolver))
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddress)
 	if err != nil {
@@ -97,7 +124,7 @@ func run() error {
 		grpcServer.GracefulStop()
 	}()
 
-	go reconciler.New(storeClient, zitiClient, runnersClient, notificationsClient, cfg.ReconciliationInterval).Run(ctx)
+	go reconciler.New(storeClient, zitiClient, runnersClient, notificationsClient, nameResolver, cfg.ReconciliationInterval).Run(ctx)
 
 	log.Printf("ExposeService listening on %s", cfg.GRPCAddress)
 
