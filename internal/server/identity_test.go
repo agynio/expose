@@ -150,13 +150,13 @@ func TestAgentInstanceIdentityIsAnAgentWorkload(t *testing.T) {
 	if parsed != identityTypeAgentInstance {
 		t.Fatalf("parsed = %q, want agent_instance", parsed)
 	}
-	if !parsed.isAgentWorkload() {
+	if !parsed.isWorkload() {
 		t.Fatal("agent_instance must count as an agent workload")
 	}
-	if !identityTypeAgent.isAgentWorkload() {
+	if !identityTypeAgent.isWorkload() {
 		t.Fatal("pre-migration agent identities must keep working")
 	}
-	if identityTypeUser.isAgentWorkload() {
+	if identityTypeUser.isWorkload() {
 		t.Fatal("user identities are not agent workloads")
 	}
 }

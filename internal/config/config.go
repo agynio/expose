@@ -13,6 +13,9 @@ type Config struct {
 	RunnersAddress         string
 	NotificationsAddress   string
 	AuthorizationAddress   string
+	OrganizationsAddress   string
+	AgentsAddress          string
+	IdentityAddress        string
 	ReconciliationInterval time.Duration
 }
 
@@ -41,6 +44,20 @@ func FromEnv() (Config, error) {
 	cfg.AuthorizationAddress = os.Getenv("AUTHORIZATION_ADDRESS")
 	if cfg.AuthorizationAddress == "" {
 		cfg.AuthorizationAddress = "authorization:50051"
+	}
+	// Name lookups for exposure addresses. Off the request hot path: they run
+	// once per AddExposure and once per exposure per reconciliation pass.
+	cfg.OrganizationsAddress = os.Getenv("ORGANIZATIONS_ADDRESS")
+	if cfg.OrganizationsAddress == "" {
+		cfg.OrganizationsAddress = "organizations:50051"
+	}
+	cfg.AgentsAddress = os.Getenv("AGENTS_ADDRESS")
+	if cfg.AgentsAddress == "" {
+		cfg.AgentsAddress = "agents:50051"
+	}
+	cfg.IdentityAddress = os.Getenv("IDENTITY_ADDRESS")
+	if cfg.IdentityAddress == "" {
+		cfg.IdentityAddress = "identity:50051"
 	}
 	interval, err := durationFromEnv("RECONCILIATION_INTERVAL", 30*time.Second)
 	if err != nil {

@@ -27,7 +27,23 @@ type mockReconcilerStore struct {
 	listByWorkloadAll      func(ctx context.Context, workloadID uuid.UUID) ([]store.Exposure, error)
 	listAllActiveWorkloads func(ctx context.Context) ([]uuid.UUID, error)
 	updateExposureStatus   func(ctx context.Context, id uuid.UUID, status store.ExposureStatus) error
+	updateExposureAddress  func(ctx context.Context, id uuid.UUID, host string, url string) error
+	updateExposureOwner    func(ctx context.Context, id uuid.UUID, owner store.ExposureOwner) error
 	deleteExposure         func(ctx context.Context, id uuid.UUID) error
+}
+
+func (m *mockReconcilerStore) UpdateExposureAddress(ctx context.Context, id uuid.UUID, host string, url string) error {
+	if m.updateExposureAddress == nil {
+		return nil
+	}
+	return m.updateExposureAddress(ctx, id, host, url)
+}
+
+func (m *mockReconcilerStore) UpdateExposureOwner(ctx context.Context, id uuid.UUID, owner store.ExposureOwner) error {
+	if m.updateExposureOwner == nil {
+		return nil
+	}
+	return m.updateExposureOwner(ctx, id, owner)
 }
 
 func (m *mockReconcilerStore) ListExposuresByStatus(ctx context.Context, status store.ExposureStatus) ([]store.Exposure, error) {
@@ -73,6 +89,14 @@ type mockZitiMgmt struct {
 
 	deletePolicy func(ctx context.Context, req *zitimanagementv1.DeleteServicePolicyRequest) (*zitimanagementv1.DeleteServicePolicyResponse, error)
 	deleteSvc    func(ctx context.Context, req *zitimanagementv1.DeleteServiceRequest) (*zitimanagementv1.DeleteServiceResponse, error)
+	updateSvc    func(ctx context.Context, req *zitimanagementv1.UpdateServiceRequest) (*zitimanagementv1.UpdateServiceResponse, error)
+}
+
+func (m *mockZitiMgmt) UpdateService(ctx context.Context, req *zitimanagementv1.UpdateServiceRequest, _ ...grpc.CallOption) (*zitimanagementv1.UpdateServiceResponse, error) {
+	if m.updateSvc == nil {
+		return nil, errors.New("not implemented")
+	}
+	return m.updateSvc(ctx, req)
 }
 
 func (m *mockZitiMgmt) DeleteServicePolicy(ctx context.Context, req *zitimanagementv1.DeleteServicePolicyRequest, _ ...grpc.CallOption) (*zitimanagementv1.DeleteServicePolicyResponse, error) {
@@ -224,17 +248,22 @@ func (m *mockRunners) BatchUpdateVolumeSampledAt(context.Context, *runnersv1.Bat
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
-func assertOutgoingIdentity(t *testing.T, ctx context.Context, agentID, workloadID uuid.UUID) {
+func assertOutgoingIdentity(t *testing.T, ctx context.Context, ownerID, workloadID uuid.UUID) {
+	t.Helper()
+	assertOutgoingIdentityOfType(t, ctx, ownerID, identitymeta.IdentityTypeAgentInstance, workloadID)
+}
+
+func assertOutgoingIdentityOfType(t *testing.T, ctx context.Context, ownerID uuid.UUID, identityType string, workloadID uuid.UUID) {
 	t.Helper()
 	md, ok := metadata.FromOutgoingContext(ctx)
 	if !ok {
 		t.Fatal("expected outgoing metadata")
 	}
-	if value := metadataValue(md, identitymeta.IdentityIDMetadataKey); value != agentID.String() {
-		t.Fatalf("expected identity id %s, got %s", agentID.String(), value)
+	if value := metadataValue(md, identitymeta.IdentityIDMetadataKey); value != ownerID.String() {
+		t.Fatalf("expected identity id %s, got %s", ownerID.String(), value)
 	}
-	if value := metadataValue(md, identitymeta.IdentityTypeMetadataKey); value != identitymeta.IdentityTypeAgent {
-		t.Fatalf("expected identity type %s, got %s", identitymeta.IdentityTypeAgent, value)
+	if value := metadataValue(md, identitymeta.IdentityTypeMetadataKey); value != identityType {
+		t.Fatalf("expected identity type %s, got %s", identityType, value)
 	}
 	if value := metadataValue(md, identitymeta.WorkloadIDMetadataKey); value != workloadID.String() {
 		t.Fatalf("expected workload id %s, got %s", workloadID.String(), value)
@@ -303,7 +332,8 @@ func TestReconcileOrphanedRemovesExposure(t *testing.T) {
 	exposure := store.Exposure{
 		ID:                   uuid.New(),
 		WorkloadID:           uuid.New(),
-		AgentID:              uuid.New(),
+		OwnerKind:            store.OwnerKindAgentInstance,
+		OwnerID:              uuid.New(),
 		OpenZitiServiceID:    "svc",
 		OpenZitiBindPolicyID: "bind",
 		OpenZitiDialPolicyID: "dial",
@@ -355,12 +385,12 @@ func TestReconcileOrphanedRemovesExposure(t *testing.T) {
 			if req.Id != exposure.WorkloadID.String() {
 				t.Fatalf("unexpected workload id %s", req.Id)
 			}
-			assertOutgoingIdentity(t, ctx, exposure.AgentID, exposure.WorkloadID)
+			assertOutgoingIdentity(t, ctx, exposure.OwnerID, exposure.WorkloadID)
 			return nil, status.Error(codes.NotFound, "missing")
 		},
 	}
 
-	reconciler := New(storeMock, mgmt, runners, nil, time.Second)
+	reconciler := New(storeMock, mgmt, runners, nil, nil, time.Second)
 	reconciler.ReconcileOnce(ctx)
 
 	if updated != 1 {
@@ -382,7 +412,8 @@ func TestReconcileOrphanedRemovesExposureWhenRemovedAt(t *testing.T) {
 	exposure := store.Exposure{
 		ID:                   uuid.New(),
 		WorkloadID:           uuid.New(),
-		AgentID:              uuid.New(),
+		OwnerKind:            store.OwnerKindAgentInstance,
+		OwnerID:              uuid.New(),
 		OpenZitiServiceID:    "svc",
 		OpenZitiBindPolicyID: "bind",
 		OpenZitiDialPolicyID: "dial",
@@ -440,7 +471,7 @@ func TestReconcileOrphanedRemovesExposureWhenRemovedAt(t *testing.T) {
 		},
 	}
 
-	reconciler := New(storeMock, mgmt, runners, nil, time.Second)
+	reconciler := New(storeMock, mgmt, runners, nil, nil, time.Second)
 	reconciler.ReconcileOnce(ctx)
 
 	if updated != 1 {
@@ -462,7 +493,8 @@ func TestReconcileOrphanedRemovesExposureWhenFailed(t *testing.T) {
 	exposure := store.Exposure{
 		ID:                   uuid.New(),
 		WorkloadID:           uuid.New(),
-		AgentID:              uuid.New(),
+		OwnerKind:            store.OwnerKindAgentInstance,
+		OwnerID:              uuid.New(),
 		OpenZitiServiceID:    "svc",
 		OpenZitiBindPolicyID: "bind",
 		OpenZitiDialPolicyID: "dial",
@@ -517,7 +549,7 @@ func TestReconcileOrphanedRemovesExposureWhenFailed(t *testing.T) {
 		},
 	}
 
-	reconciler := New(storeMock, mgmt, runners, nil, time.Second)
+	reconciler := New(storeMock, mgmt, runners, nil, nil, time.Second)
 	reconciler.ReconcileOnce(ctx)
 
 	if updated != 1 {
@@ -539,7 +571,8 @@ func TestReconcileOrphanedRemovesExposureWhenNilWorkload(t *testing.T) {
 	exposure := store.Exposure{
 		ID:                   uuid.New(),
 		WorkloadID:           uuid.New(),
-		AgentID:              uuid.New(),
+		OwnerKind:            store.OwnerKindAgentInstance,
+		OwnerID:              uuid.New(),
 		OpenZitiServiceID:    "svc",
 		OpenZitiBindPolicyID: "bind",
 		OpenZitiDialPolicyID: "dial",
@@ -592,7 +625,7 @@ func TestReconcileOrphanedRemovesExposureWhenNilWorkload(t *testing.T) {
 		},
 	}
 
-	reconciler := New(storeMock, mgmt, runners, nil, time.Second)
+	reconciler := New(storeMock, mgmt, runners, nil, nil, time.Second)
 	reconciler.ReconcileOnce(ctx)
 
 	if updated != 1 {
@@ -611,7 +644,7 @@ func TestReconcileOrphanedRemovesExposureWhenNilWorkload(t *testing.T) {
 
 func TestReconcileOrphanedSkipsExistingWorkload(t *testing.T) {
 	ctx := context.Background()
-	exposure := store.Exposure{ID: uuid.New(), WorkloadID: uuid.New(), AgentID: uuid.New()}
+	exposure := store.Exposure{ID: uuid.New(), WorkloadID: uuid.New(), OwnerKind: store.OwnerKindAgentInstance, OwnerID: uuid.New()}
 
 	updated := 0
 	deleted := 0
@@ -638,7 +671,7 @@ func TestReconcileOrphanedSkipsExistingWorkload(t *testing.T) {
 				Workload: &runnersv1.Workload{Status: runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING},
 			}, nil
 		},
-	}, nil, time.Second)
+	}, nil, nil, time.Second)
 
 	reconciler.ReconcileOnce(ctx)
 
@@ -656,7 +689,8 @@ func TestReconcileWorkloadRemovesExposureWhenRemovedAt(t *testing.T) {
 	exposure := store.Exposure{
 		ID:                   uuid.New(),
 		WorkloadID:           workloadID,
-		AgentID:              uuid.New(),
+		OwnerKind:            store.OwnerKindAgentInstance,
+		OwnerID:              uuid.New(),
 		OpenZitiServiceID:    "svc",
 		OpenZitiBindPolicyID: "bind",
 		OpenZitiDialPolicyID: "dial",
@@ -699,7 +733,7 @@ func TestReconcileWorkloadRemovesExposureWhenRemovedAt(t *testing.T) {
 			if req.Id != workloadID.String() {
 				t.Fatalf("unexpected workload id %s", req.Id)
 			}
-			assertOutgoingIdentity(t, ctx, exposure.AgentID, exposure.WorkloadID)
+			assertOutgoingIdentity(t, ctx, exposure.OwnerID, exposure.WorkloadID)
 			return &runnersv1.GetWorkloadResponse{
 				Workload: &runnersv1.Workload{
 					Status:    runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING,
@@ -709,7 +743,7 @@ func TestReconcileWorkloadRemovesExposureWhenRemovedAt(t *testing.T) {
 		},
 	}
 
-	reconciler := New(storeMock, mgmt, runners, nil, time.Second)
+	reconciler := New(storeMock, mgmt, runners, nil, nil, time.Second)
 	reconciler.reconcileWorkload(ctx, workloadID)
 
 	if listCalls != 1 {
@@ -732,7 +766,8 @@ func TestReconcileWorkloadRemovesExposureWhenFailed(t *testing.T) {
 	exposure := store.Exposure{
 		ID:                   uuid.New(),
 		WorkloadID:           workloadID,
-		AgentID:              uuid.New(),
+		OwnerKind:            store.OwnerKindAgentInstance,
+		OwnerID:              uuid.New(),
 		OpenZitiServiceID:    "svc",
 		OpenZitiBindPolicyID: "bind",
 		OpenZitiDialPolicyID: "dial",
@@ -778,7 +813,7 @@ func TestReconcileWorkloadRemovesExposureWhenFailed(t *testing.T) {
 		},
 	}
 
-	reconciler := New(storeMock, mgmt, runners, nil, time.Second)
+	reconciler := New(storeMock, mgmt, runners, nil, nil, time.Second)
 	reconciler.reconcileWorkload(ctx, workloadID)
 
 	if listCalls != 1 {
@@ -801,7 +836,8 @@ func TestReconcileWorkloadRemovesExposureWhenNilWorkload(t *testing.T) {
 	exposure := store.Exposure{
 		ID:                   uuid.New(),
 		WorkloadID:           workloadID,
-		AgentID:              uuid.New(),
+		OwnerKind:            store.OwnerKindAgentInstance,
+		OwnerID:              uuid.New(),
 		OpenZitiServiceID:    "svc",
 		OpenZitiBindPolicyID: "bind",
 		OpenZitiDialPolicyID: "dial",
@@ -848,7 +884,7 @@ func TestReconcileWorkloadRemovesExposureWhenNilWorkload(t *testing.T) {
 		},
 	}
 
-	reconciler := New(storeMock, mgmt, runners, nil, time.Second)
+	reconciler := New(storeMock, mgmt, runners, nil, nil, time.Second)
 	reconciler.reconcileWorkload(ctx, workloadID)
 
 	if listCalls != 1 {
@@ -868,7 +904,7 @@ func TestReconcileWorkloadRemovesExposureWhenNilWorkload(t *testing.T) {
 func TestReconcileWorkloadSkipsRunningWorkload(t *testing.T) {
 	ctx := context.Background()
 	workloadID := uuid.New()
-	exposure := store.Exposure{ID: uuid.New(), WorkloadID: workloadID, AgentID: uuid.New()}
+	exposure := store.Exposure{ID: uuid.New(), WorkloadID: workloadID, OwnerKind: store.OwnerKindAgentInstance, OwnerID: uuid.New()}
 
 	listCalls := 0
 	deleted := 0
@@ -891,7 +927,7 @@ func TestReconcileWorkloadSkipsRunningWorkload(t *testing.T) {
 		},
 	}
 
-	reconciler := New(storeMock, &mockZitiMgmt{}, runners, nil, time.Second)
+	reconciler := New(storeMock, &mockZitiMgmt{}, runners, nil, nil, time.Second)
 	reconciler.reconcileWorkload(ctx, workloadID)
 
 	if listCalls != 1 {
@@ -904,7 +940,7 @@ func TestReconcileWorkloadSkipsRunningWorkload(t *testing.T) {
 
 func TestReconcileOrphanedSkipsOnError(t *testing.T) {
 	ctx := context.Background()
-	exposure := store.Exposure{ID: uuid.New(), WorkloadID: uuid.New(), AgentID: uuid.New()}
+	exposure := store.Exposure{ID: uuid.New(), WorkloadID: uuid.New(), OwnerKind: store.OwnerKindAgentInstance, OwnerID: uuid.New()}
 
 	updated := 0
 	storeMock := &mockReconcilerStore{
@@ -924,7 +960,7 @@ func TestReconcileOrphanedSkipsOnError(t *testing.T) {
 		getWorkload: func(_ context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error) {
 			return nil, status.Error(codes.Internal, "boom")
 		},
-	}, nil, time.Second)
+	}, nil, nil, time.Second)
 
 	reconciler.ReconcileOnce(ctx)
 
@@ -963,7 +999,7 @@ func TestReconcileFailedRemovesExposure(t *testing.T) {
 		deleteSvc: func(_ context.Context, req *zitimanagementv1.DeleteServiceRequest) (*zitimanagementv1.DeleteServiceResponse, error) {
 			return &zitimanagementv1.DeleteServiceResponse{}, nil
 		},
-	}, &mockRunners{}, nil, time.Second)
+	}, &mockRunners{}, nil, nil, time.Second)
 
 	reconciler.ReconcileOnce(ctx)
 
@@ -999,7 +1035,7 @@ func TestReconcileFailedStopsOnError(t *testing.T) {
 		deletePolicy: func(_ context.Context, req *zitimanagementv1.DeleteServicePolicyRequest) (*zitimanagementv1.DeleteServicePolicyResponse, error) {
 			return nil, status.Error(codes.Internal, "boom")
 		},
-	}, &mockRunners{}, nil, time.Second)
+	}, &mockRunners{}, nil, nil, time.Second)
 
 	reconciler.ReconcileOnce(ctx)
 
@@ -1038,7 +1074,7 @@ func TestReconcileRemovingHandlesNotFound(t *testing.T) {
 		deleteSvc: func(_ context.Context, req *zitimanagementv1.DeleteServiceRequest) (*zitimanagementv1.DeleteServiceResponse, error) {
 			return nil, status.Error(codes.NotFound, "missing")
 		},
-	}, &mockRunners{}, nil, time.Second)
+	}, &mockRunners{}, nil, nil, time.Second)
 
 	reconciler.ReconcileOnce(ctx)
 
@@ -1077,7 +1113,7 @@ func TestReconcileRemovingStopsOnError(t *testing.T) {
 		deleteSvc: func(_ context.Context, req *zitimanagementv1.DeleteServiceRequest) (*zitimanagementv1.DeleteServiceResponse, error) {
 			return nil, status.Error(codes.Internal, "boom")
 		},
-	}, &mockRunners{}, nil, time.Second)
+	}, &mockRunners{}, nil, nil, time.Second)
 
 	reconciler.ReconcileOnce(ctx)
 
@@ -1170,7 +1206,7 @@ func TestSubscribeAndProcessResubscribesOnRoomChange(t *testing.T) {
 		},
 	}
 
-	reconciler := New(storeMock, nil, nil, notifications, time.Second)
+	reconciler := New(storeMock, nil, nil, notifications, nil, time.Second)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
