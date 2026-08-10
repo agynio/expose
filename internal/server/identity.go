@@ -18,8 +18,13 @@ const (
 	clusterAdminObject         = "cluster:global"
 	identityUserPrefix         = "identity:"
 	organizationObjectPrefix   = "organization:"
+	sandboxObjectPrefix        = "sandbox:"
 	organizationOwnerRelation  = "owner"
 	organizationMemberRelation = "member"
+	// The relation the Terminal Proxy checks to issue a shell ticket. A shell
+	// can run `agyn expose` itself, so managing the same ports through an API
+	// call is the same capability and takes the same relation.
+	sandboxCanConnectRelation = "can_connect"
 )
 
 type identityType string
@@ -122,6 +127,26 @@ func ensureIDMatch(expectedID, providedID, label string) error {
 		return status.Error(codes.PermissionDenied, label+" id does not match workload")
 	}
 	return nil
+}
+
+// checkSandboxRelation reports whether the caller holds a relation on a
+// sandbox. Unlike requireOrgRelation it returns the decision rather than an
+// error, because callers fall through to a second check when it is false.
+func checkSandboxRelation(ctx context.Context, authz authorizationv1.AuthorizationServiceClient, identityID, sandboxID, relation string) (bool, error) {
+	if identityID == "" || sandboxID == "" {
+		return false, status.Error(codes.Internal, "identity or sandbox id missing for authorization check")
+	}
+	resp, err := authz.Check(ctx, &authorizationv1.CheckRequest{
+		TupleKey: &authorizationv1.TupleKey{
+			User:     identityUserPrefix + identityID,
+			Relation: relation,
+			Object:   sandboxObjectPrefix + sandboxID,
+		},
+	})
+	if err != nil {
+		return false, status.Errorf(codes.Internal, "authorization check failed: %v", err)
+	}
+	return resp.GetAllowed(), nil
 }
 
 func requireOrgRelation(ctx context.Context, authz authorizationv1.AuthorizationServiceClient, identityID, organizationID, relation string) error {
