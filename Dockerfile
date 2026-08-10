@@ -29,7 +29,9 @@ RUN buf generate buf.build/agynio/api --include-imports \
     --path agynio/api/runner/v1 \
     --path agynio/api/notifications/v1 \
     --path agynio/api/identity/v1 \
-    --path agynio/api/authorization/v1
+    --path agynio/api/authorization/v1 \
+    --path agynio/api/agents/v1 \
+    --path agynio/api/organizations/v1
 
 COPY . .
 
