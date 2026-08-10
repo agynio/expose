@@ -639,10 +639,14 @@ func TestAddExposureExplicitRequiresClusterAdmin(t *testing.T) {
 		return fmt.Errorf("unexpected create call")
 	}}
 
-	svc := New(storeMock, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz(), stubNames{})
+	// Who may act on the explicit path depends on what owns the workload, so
+	// the workload is read before the decision. An agent-instance owner has no
+	// relation a user could hold, leaving cluster admin.
+	runnersMock := workloadOwnedBy(runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE, agentID, uuid.New())
+
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, defaultAuthz(), stubNames{})
 	_, err := svc.AddExposure(ctx, &exposev1.AddExposureRequest{
 		WorkloadId: workloadID.String(),
-		AgentId:    agentID.String(),
 		Port:       8080,
 	})
 	if status.Code(err) != codes.PermissionDenied {

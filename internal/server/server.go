@@ -106,9 +106,6 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 	explicitWorkloadID := strings.TrimSpace(req.GetWorkloadId())
 	var workloadID uuid.UUID
 	if explicitWorkloadID != "" {
-		if err := requireClusterAdmin(ctx, s.authz, caller.identity.identityID); err != nil {
-			return nil, err
-		}
 		parsedWorkloadID, err := parseUUID(explicitWorkloadID, "workload_id")
 		if err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -148,6 +145,8 @@ func (s *Server) AddExposure(ctx context.Context, req *exposev1.AddExposureReque
 		if err := requireWorkloadSelf(caller, owner.OwnerID); err != nil {
 			return nil, err
 		}
+	} else if err := s.requireExposureMutation(ctx, caller, owner); err != nil {
+		return nil, err
 	}
 
 	// Every exposure on one entity shares a hostname and differs only in port,
@@ -288,7 +287,7 @@ func (s *Server) RemoveExposure(ctx context.Context, req *exposev1.RemoveExposur
 		return nil, err
 	}
 	if !allowed {
-		if err := requireOrgRelation(ctx, s.authz, caller.identity.identityID, owner.OrganizationID.UUID.String(), organizationOwnerRelation); err != nil {
+		if err := s.requireExposureMutation(ctx, caller, owner); err != nil {
 			return nil, err
 		}
 	}
@@ -357,6 +356,34 @@ func (s *Server) ListExposures(ctx context.Context, req *exposev1.ListExposuresR
 		return nil, status.Errorf(codes.Internal, "encode page token: %v", err)
 	}
 	return &exposev1.ListExposuresResponse{Exposures: items, NextPageToken: nextToken}, nil
+}
+
+// requireExposureMutation authorizes a caller who is not the workload to add or
+// remove one of its exposures.
+//
+// A sandbox's ports belong to whoever can open a shell in it: a shell can run
+// `agyn expose add` already, so a button that does the same confers nothing new,
+// and a stricter gate would refuse someone the terminal in the next tab obeys.
+// An agent-instance workload has no comparable relation, so it stays
+// cluster-admin-only.
+func (s *Server) requireExposureMutation(ctx context.Context, caller exposureCaller, owner store.ExposureOwner) error {
+	if owner.OwnerKind == store.OwnerKindSandbox {
+		allowed, err := checkSandboxRelation(ctx, s.authz, caller.identity.identityID, owner.OwnerID.String(), sandboxCanConnectRelation)
+		if err != nil {
+			return err
+		}
+		if allowed {
+			return nil
+		}
+	}
+	// An organization owner keeps the reach they had over an agent workload's
+	// exposures; for a sandbox this is the fallback after can_connect.
+	if owner.OrganizationID.Valid {
+		if err := requireOrgRelation(ctx, s.authz, caller.identity.identityID, owner.OrganizationID.UUID.String(), organizationOwnerRelation); err == nil {
+			return nil
+		}
+	}
+	return requireClusterAdmin(ctx, s.authz, caller.identity.identityID)
 }
 
 func (s *Server) handleProvisioningFailure(ctx context.Context, exposureID uuid.UUID, resources store.ExposureResourceIDs) {
