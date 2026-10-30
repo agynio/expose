@@ -1292,6 +1292,98 @@ func TestListExposuresOrgMember(t *testing.T) {
 	}
 }
 
+// The Orchestrator asks whether a workload has an active exposure before it
+// hibernates it, and it asks as the platform rather than as anything in the
+// workload's organization. Cluster admin on its identity is what admits it.
+func TestListExposuresPlatformClusterAdmin(t *testing.T) {
+	workloadID := uuid.New()
+	orgID := uuid.New()
+	platformID := uuid.New().String()
+	ctx := contextWithIdentity(platformID, string(identityTypePlatform), "")
+	storeMock := &mockStore{
+		listExposuresByWorkload: func(_ context.Context, id uuid.UUID, _ int32, _ *store.PageCursor) (store.ListResult, error) {
+			if id != workloadID {
+				return store.ListResult{}, fmt.Errorf("unexpected workload id %s", id)
+			}
+			return store.ListResult{Exposures: []store.Exposure{{
+				ID:                   uuid.New(),
+				WorkloadID:           workloadID,
+				OwnerKind:            store.OwnerKindAgentInstance,
+				OwnerID:              uuid.New(),
+				Port:                 8080,
+				OpenZitiServiceID:    "svc-id",
+				OpenZitiBindPolicyID: "bind-id",
+				OpenZitiDialPolicyID: "dial-id",
+				Hostname:             "exposed.agyn",
+				URL:                  "http://exposed.agyn:8080",
+				Status:               store.ExposureStatusActive,
+			}}}, nil
+		},
+	}
+	runnersMock := workloadOwnedBy(runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE, uuid.New(), orgID)
+	var checks []*authorizationv1.TupleKey
+	authz := &mockAuthz{check: func(_ context.Context, req *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
+		checks = append(checks, req.GetTupleKey())
+		return &authorizationv1.CheckResponse{Allowed: true}, nil
+	}}
+
+	svc := New(storeMock, &mockZitiMgmt{}, runnersMock, authz, stubNames{})
+	resp, err := svc.ListExposures(ctx, &exposev1.ListExposuresRequest{WorkloadId: workloadID.String()})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.GetExposures()) != 1 {
+		t.Fatalf("expected one exposure, got %d", len(resp.GetExposures()))
+	}
+	if len(checks) != 1 {
+		t.Fatalf("expected one authorization check, got %d", len(checks))
+	}
+	if checks[0].GetUser() != identityUserPrefix+platformID {
+		t.Fatalf("expected user %s, got %s", identityUserPrefix+platformID, checks[0].GetUser())
+	}
+	if checks[0].GetRelation() != clusterAdminRelation {
+		t.Fatalf("expected relation %s, got %s", clusterAdminRelation, checks[0].GetRelation())
+	}
+	if checks[0].GetObject() != clusterAdminObject {
+		t.Fatalf("expected object %s, got %s", clusterAdminObject, checks[0].GetObject())
+	}
+}
+
+// The type header is a claim, settled by the relation alone. A caller that
+// presents it without holding cluster admin is refused, and is not tried as a
+// member instead: a claim that fails is a refusal, not a fallback.
+func TestListExposuresPlatformWithoutClusterAdmin(t *testing.T) {
+	workloadID := uuid.New()
+	orgID := uuid.New()
+	ctx := contextWithIdentity(uuid.New().String(), string(identityTypePlatform), "")
+	runnersMock := workloadOwnedBy(runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE, uuid.New(), orgID)
+	// A member check would admit this caller, so the refusal below means none
+	// was made.
+	var relations []string
+	authz := &mockAuthz{check: func(_ context.Context, req *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
+		relations = append(relations, req.GetTupleKey().GetRelation())
+		return &authorizationv1.CheckResponse{Allowed: req.GetTupleKey().GetRelation() == organizationMemberRelation}, nil
+	}}
+
+	svc := New(&mockStore{}, &mockZitiMgmt{}, runnersMock, authz, stubNames{})
+	_, err := svc.ListExposures(ctx, &exposev1.ListExposuresRequest{WorkloadId: workloadID.String()})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected permission denied, got %v", err)
+	}
+	if len(relations) != 1 || relations[0] != clusterAdminRelation {
+		t.Fatalf("expected only the cluster admin check, got %v", relations)
+	}
+}
+
+func TestListExposuresRejectsUnknownIdentityType(t *testing.T) {
+	ctx := contextWithIdentity(uuid.New().String(), "service", "")
+	svc := New(&mockStore{}, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz(), stubNames{})
+	_, err := svc.ListExposures(ctx, &exposev1.ListExposuresRequest{WorkloadId: uuid.New().String()})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("expected unauthenticated, got %v", err)
+	}
+}
+
 func TestListExposuresInvalidWorkload(t *testing.T) {
 	ctx := contextWithIdentity("user-id", string(identityTypeUser), "")
 	svc := New(&mockStore{}, &mockZitiMgmt{}, &mockRunners{}, defaultAuthz(), stubNames{})

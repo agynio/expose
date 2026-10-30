@@ -36,6 +36,7 @@ const (
 	identityTypeSandbox       identityType = identitymeta.IdentityTypeSandbox
 	identityTypeApp           identityType = identitymeta.IdentityTypeApp
 	identityTypeRunner        identityType = identitymeta.IdentityTypeRunner
+	identityTypePlatform      identityType = identitymeta.IdentityTypePlatform
 )
 
 // isWorkload reports whether the identity belongs to a running workload, which
@@ -201,6 +202,8 @@ func parseIdentityType(value string) (identityType, error) {
 		return identityTypeApp, nil
 	case string(identityTypeRunner):
 		return identityTypeRunner, nil
+	case string(identityTypePlatform):
+		return identityTypePlatform, nil
 	default:
 		return "", fmt.Errorf("unsupported identity type: %q", value)
 	}
