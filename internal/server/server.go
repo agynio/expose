@@ -335,7 +335,7 @@ func (s *Server) ListExposures(ctx context.Context, req *exposev1.ListExposuresR
 		return nil, err
 	}
 	if !allowed {
-		if err := requireOrgRelation(ctx, s.authz, caller.identity.identityID, owner.OrganizationID.UUID.String(), organizationMemberRelation); err != nil {
+		if err := s.requireExposureRead(ctx, caller, owner); err != nil {
 			return nil, err
 		}
 	}
@@ -356,6 +356,22 @@ func (s *Server) ListExposures(ctx context.Context, req *exposev1.ListExposuresR
 		return nil, status.Errorf(codes.Internal, "encode page token: %v", err)
 	}
 	return &exposev1.ListExposuresResponse{Exposures: items, NextPageToken: nextToken}, nil
+}
+
+// requireExposureRead authorizes a caller who is not the workload to list its
+// exposures.
+//
+// The Orchestrator asks before it hibernates a workload, because an exposed port
+// is a standing request to be reachable and a frozen guest is not. It asks as
+// the platform, which holds cluster admin rather than a membership in the
+// workload's organization, and that is what admits it. The type header proves
+// nothing, so a caller that sets it without holding the relation is refused
+// here rather than tried as a member.
+func (s *Server) requireExposureRead(ctx context.Context, caller exposureCaller, owner store.ExposureOwner) error {
+	if caller.identity.identityType == identityTypePlatform {
+		return requireClusterAdmin(ctx, s.authz, caller.identity.identityID)
+	}
+	return requireOrgRelation(ctx, s.authz, caller.identity.identityID, owner.OrganizationID.UUID.String(), organizationMemberRelation)
 }
 
 // requireExposureMutation authorizes a caller who is not the workload to add or

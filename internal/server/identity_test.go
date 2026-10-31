@@ -160,3 +160,19 @@ func TestAgentInstanceIdentityIsAnAgentWorkload(t *testing.T) {
 		t.Fatal("user identities are not agent workloads")
 	}
 }
+
+// The platform calls as itself. The type parses so that the claim can be
+// checked, but it is never the workload: it cannot pass the self-service check
+// or leave the workload to be inferred from its connection.
+func TestPlatformIdentityIsNotAWorkload(t *testing.T) {
+	parsed, err := parseIdentityType("platform")
+	if err != nil {
+		t.Fatalf("parse platform: %v", err)
+	}
+	if parsed != identityTypePlatform {
+		t.Fatalf("parsed = %q, want platform", parsed)
+	}
+	if parsed.isWorkload() {
+		t.Fatal("the platform is not a workload")
+	}
+}

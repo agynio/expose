@@ -9,7 +9,6 @@ import (
 	"time"
 
 	notificationsv1 "github.com/agynio/expose/.gen/go/agynio/api/notifications/v1"
-	runnerv1 "github.com/agynio/expose/.gen/go/agynio/api/runner/v1"
 	runnersv1 "github.com/agynio/expose/.gen/go/agynio/api/runners/v1"
 	zitimanagementv1 "github.com/agynio/expose/.gen/go/agynio/api/ziti_management/v1"
 	"github.com/agynio/expose/internal/identitymeta"
@@ -114,91 +113,12 @@ func (m *mockZitiMgmt) DeleteService(ctx context.Context, req *zitimanagementv1.
 }
 
 type mockRunners struct {
+	// Embedded so the mock satisfies the client without restating it.
+	// Adding an RPC to the API cannot break this; calling one the test did
+	// not override panics, which is what a test wants.
+	runnersv1.RunnersServiceClient
+
 	getWorkload func(ctx context.Context, req *runnersv1.GetWorkloadRequest) (*runnersv1.GetWorkloadResponse, error)
-}
-
-func (m *mockRunners) CreateFlavor(context.Context, *runnersv1.CreateFlavorRequest, ...grpc.CallOption) (*runnersv1.CreateFlavorResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) GetFlavor(context.Context, *runnersv1.GetFlavorRequest, ...grpc.CallOption) (*runnersv1.GetFlavorResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) UpdateFlavor(context.Context, *runnersv1.UpdateFlavorRequest, ...grpc.CallOption) (*runnersv1.UpdateFlavorResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) DeleteFlavor(context.Context, *runnersv1.DeleteFlavorRequest, ...grpc.CallOption) (*runnersv1.DeleteFlavorResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) ListFlavors(context.Context, *runnersv1.ListFlavorsRequest, ...grpc.CallOption) (*runnersv1.ListFlavorsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) ReportRunnerCatalog(context.Context, *runnersv1.ReportRunnerCatalogRequest, ...grpc.CallOption) (*runnersv1.ReportRunnerCatalogResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) ListStorageClasses(context.Context, *runnersv1.ListStorageClassesRequest, ...grpc.CallOption) (*runnersv1.ListStorageClassesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) ListWorkloadsByAgentInstance(context.Context, *runnersv1.ListWorkloadsByAgentInstanceRequest, ...grpc.CallOption) (*runnersv1.ListWorkloadsByAgentInstanceResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) ListVolumesByAgentInstance(context.Context, *runnersv1.ListVolumesByAgentInstanceRequest, ...grpc.CallOption) (*runnersv1.ListVolumesByAgentInstanceResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) RegisterRunner(context.Context, *runnersv1.RegisterRunnerRequest, ...grpc.CallOption) (*runnersv1.RegisterRunnerResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) GetRunner(context.Context, *runnersv1.GetRunnerRequest, ...grpc.CallOption) (*runnersv1.GetRunnerResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) ListRunners(context.Context, *runnersv1.ListRunnersRequest, ...grpc.CallOption) (*runnersv1.ListRunnersResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) UpdateRunner(context.Context, *runnersv1.UpdateRunnerRequest, ...grpc.CallOption) (*runnersv1.UpdateRunnerResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) DeleteRunner(context.Context, *runnersv1.DeleteRunnerRequest, ...grpc.CallOption) (*runnersv1.DeleteRunnerResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) ValidateServiceToken(context.Context, *runnersv1.ValidateServiceTokenRequest, ...grpc.CallOption) (*runnersv1.ValidateServiceTokenResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) EnrollRunner(context.Context, *runnersv1.EnrollRunnerRequest, ...grpc.CallOption) (*runnersv1.EnrollRunnerResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) CreateWorkload(context.Context, *runnersv1.CreateWorkloadRequest, ...grpc.CallOption) (*runnersv1.CreateWorkloadResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) UpdateWorkload(context.Context, *runnersv1.UpdateWorkloadRequest, ...grpc.CallOption) (*runnersv1.UpdateWorkloadResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) UpdateWorkloadStatus(context.Context, *runnersv1.UpdateWorkloadStatusRequest, ...grpc.CallOption) (*runnersv1.UpdateWorkloadStatusResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) TouchWorkload(context.Context, *runnersv1.TouchWorkloadRequest, ...grpc.CallOption) (*runnersv1.TouchWorkloadResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) DeleteWorkload(context.Context, *runnersv1.DeleteWorkloadRequest, ...grpc.CallOption) (*runnersv1.DeleteWorkloadResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
 func (m *mockRunners) GetWorkload(ctx context.Context, req *runnersv1.GetWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.GetWorkloadResponse, error) {
@@ -206,46 +126,6 @@ func (m *mockRunners) GetWorkload(ctx context.Context, req *runnersv1.GetWorkloa
 		return nil, errors.New("not implemented")
 	}
 	return m.getWorkload(ctx, req)
-}
-
-func (m *mockRunners) ListWorkloadsByThread(context.Context, *runnersv1.ListWorkloadsByThreadRequest, ...grpc.CallOption) (*runnersv1.ListWorkloadsByThreadResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) ListWorkloads(context.Context, *runnersv1.ListWorkloadsRequest, ...grpc.CallOption) (*runnersv1.ListWorkloadsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) BatchUpdateWorkloadSampledAt(context.Context, *runnersv1.BatchUpdateWorkloadSampledAtRequest, ...grpc.CallOption) (*runnersv1.BatchUpdateWorkloadSampledAtResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) StreamWorkloadLogs(context.Context, *runnerv1.StreamWorkloadLogsRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[runnerv1.StreamWorkloadLogsResponse], error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) CreateVolume(context.Context, *runnersv1.CreateVolumeRequest, ...grpc.CallOption) (*runnersv1.CreateVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) UpdateVolume(context.Context, *runnersv1.UpdateVolumeRequest, ...grpc.CallOption) (*runnersv1.UpdateVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) GetVolume(context.Context, *runnersv1.GetVolumeRequest, ...grpc.CallOption) (*runnersv1.GetVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) ListVolumes(context.Context, *runnersv1.ListVolumesRequest, ...grpc.CallOption) (*runnersv1.ListVolumesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) ListVolumesByThread(context.Context, *runnersv1.ListVolumesByThreadRequest, ...grpc.CallOption) (*runnersv1.ListVolumesByThreadResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
-}
-
-func (m *mockRunners) BatchUpdateVolumeSampledAt(context.Context, *runnersv1.BatchUpdateVolumeSampledAtRequest, ...grpc.CallOption) (*runnersv1.BatchUpdateVolumeSampledAtResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
 func assertOutgoingIdentity(t *testing.T, ctx context.Context, ownerID, workloadID uuid.UUID) {
